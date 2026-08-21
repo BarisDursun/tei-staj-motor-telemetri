@@ -222,9 +222,23 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     currentEngine->param_YagSicakligi = static_cast<float>(yagSicakligi);
     currentEngine->param_Titresim     = static_cast<float>(titresim);
 
-    // EngineAlarmLevel ve AlarmLevel ayni sirada tanimli (Normal/Warning/Critical),
-    // Engine sinifi Qt'ye bagimli olmasin diye kendi enum'unu dondurur.
-    setAlarmLevel(static_cast<AlarmLevel>(currentEngine->EvaluateAlarm()));
+    // Alarm degerlendirmesi SADECE motor "oturmus" sayilacak kadar spool
+    // olduysa yapilir (yag pompasi spool'u >= %60). Aksi halde iki durumda
+    // yanlis KRITIK cikardi: (1) motor tamamen kapaliyken yag basinci
+    // gercekci olarak 0 - "dusuk yag basinci" bant kontrolu bunu ariza sanir,
+    // (2) motor YENI baslatilirken (spool-up devam ederken) yag pompasi
+    // henuz tam hiza ulasmadigi icin basinc gecici olarak dusuk - gercek bir
+    // motorda da start sirasinda birkac saniye "dusuk yag basinci" alarmi
+    // verilmez, pompanin oturmasi beklenir. m_running=false oldugunda zaten
+    // spool geriye gidip bu esigin altina duser, o yuzden ayrica kontrol
+    // etmeye gerek yok.
+    if (m_factorYagBasinci >= 0.60) {
+        // EngineAlarmLevel ve AlarmLevel ayni sirada tanimli (Normal/Warning/Critical),
+        // Engine sinifi Qt'ye bagimli olmasin diye kendi enum'unu dondurur.
+        setAlarmLevel(static_cast<AlarmLevel>(currentEngine->EvaluateAlarm()));
+    } else {
+        setAlarmLevel(AlarmLevel::Normal);
+    }
 }
 
 QString EngineModel::alarmLevelText() const {
