@@ -49,6 +49,13 @@ struct ParamCeilings {
     double devir1, devir2, basinc, egt, yakit, yagBasinci, yagSicakligi, titresim;
 };
 
+// Asinmadan etkilenen 5 parametrenin "yeni motor" referansindan yuzde
+// sapmasi (bkz. Engine::GetWearDeviations yorumu). Devir1/Devir2/Basinc
+// bu modelde asinmadan etkilenmiyor, bu yuzden listede yok.
+struct WearDeviations {
+    double egtPct, yakitPct, yagBasinciPct, yagSicakligiPct, titresimPct;
+};
+
 // Temel Motor Sınıfı
 class Engine {
 public:
@@ -102,6 +109,14 @@ public:
     // Motora ozgu, %100 guctekiyle birebir ayni tavan degerleri (bkz. ParamCeilings yorumu).
     virtual ParamCeilings GetParamCeilings() const = 0;
 
+    // Her asinmadan etkilenen parametrenin, VERILEN guc seviyesinde (0..1),
+    // "yeni motor" referansindan yuzde kac saptigini dondurur (orn. +18.0 =
+    // referansin %18 uzeri). Guce bagli cunku asinma etkisi rolantide zayif,
+    // tam guçte tam etki gosterir (bkz. WearScale yorumu) - bu yuzden
+    // EngineModel bunu her tikte GUNCEL guc ile yeniden hesaplar, gaz kolu
+    // hareket ettikce sapma yuzdeleri de degisir.
+    virtual WearDeviations GetWearDeviations(float power) const = 0;
+
 protected:
     static EngineAlarmLevel worstOf(EngineAlarmLevel a, EngineAlarmLevel b) {
         return static_cast<int>(b) > static_cast<int>(a) ? b : a;
@@ -138,11 +153,17 @@ public:
     static constexpr float WEAR_YAG_SICAKLIGI = 0.15f;
     static constexpr float WEAR_TITRESIM = 1.5f;
 
+    // Asinma etkisinin gucun kendisiyle birlikte olceklenmesi (rolantide zayif,
+    // tam guçte tam etki) - gercek ucaklarda "EGT margin" olcumu de hep yuksek
+    // guçte yapilir, cunku rolantide asinmis/saglikli motor arasindaki fark
+    // gorece kucuktur; motor zorlaninca fark cok daha belirgin hale gelir.
+    static float WearScale(float power) { return 0.3f + 0.7f * power; }
+
     void Engine_Start(float power, float lm35Temp) override {
         if (power < 0.0f) power = 0.0f;
         if (power > 1.0f) power = 1.0f;
         powerLevel = power;
-        const float w = WearFactor();
+        const float w = WearFactor() * WearScale(power);
 
         param_Devir1 = 35.0f + (power * 65.0f);
         param_Devir2 = 65.0f + (power * 35.0f);
@@ -202,6 +223,19 @@ public:
             /*yagBasinci*/ 70.0 * (1.0 + w * WEAR_YAG_BASINCI),
             /*yagSicakligi*/ 120.0 * (1.0 + w * WEAR_YAG_SICAKLIGI),
             /*titresim*/ 6.0 * (1.0 + w * WEAR_TITRESIM)
+        };
+    }
+
+    WearDeviations GetWearDeviations(float power) const override {
+        if (power < 0.0f) power = 0.0f;
+        if (power > 1.0f) power = 1.0f;
+        const double w = WearFactor() * WearScale(power);
+        return WearDeviations{
+            w * WEAR_EGT * 100.0,
+            w * WEAR_YAKIT * 100.0,
+            w * WEAR_YAG_BASINCI * 100.0,
+            w * WEAR_YAG_SICAKLIGI * 100.0,
+            w * WEAR_TITRESIM * 100.0
         };
     }
 };
@@ -266,6 +300,12 @@ public:
             /*devir1*/ 2800.0, /*devir2*/ 105.0, /*basinc*/ 2.6, /*egt*/ 600.0,
             /*yakit*/ 36.0, /*yagBasinci*/ 5.5, /*yagSicakligi*/ 115.0, /*titresim*/ 3.0
         };
+    }
+
+    // PD170 icin henuz bir filo/yas modeli yok (sadece TF10000'de var) -
+    // ageYears hep 0 kaldigi icin bu zaten dogal olarak sifir doner.
+    WearDeviations GetWearDeviations(float /*power*/) const override {
+        return WearDeviations{0.0, 0.0, 0.0, 0.0, 0.0};
     }
 };
 

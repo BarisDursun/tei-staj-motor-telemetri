@@ -24,6 +24,9 @@ class EngineModel : public QObject {
     // Anlik calisma guvenligi (alarmLevel) DEGIL - motorun yasina/asinmasina
     // dayali uzun vadeli bakim durumu (bkz. engine_core.h MaintenanceStatus).
     Q_PROPERTY(QString maintenanceStatusText READ maintenanceStatusText NOTIFY maintenanceStatusChanged)
+    // "Neden bu bakim durumu" aciklamasi - en cok sapan parametreler, en
+    // buyuk sapma basta (bkz. cpp'deki wearNotes hesaplamasi).
+    Q_PROPERTY(QVariantList wearNotes READ wearNotes NOTIFY maintenanceStatusChanged)
 
 public:
     // Engine::EvaluateAlarm()'daki EngineAlarmLevel ile ayni sirada (Qt tarafi
@@ -60,7 +63,11 @@ public:
     double titresim() const     { return m_titresim; }
     AlarmLevel alarmLevel() const { return m_alarmLevel; }
     QString alarmLevelText() const;
-    QString maintenanceStatusText() const { return m_maintenanceStatusText; }
+    // Gercek teshis, motor test EDILENE kadar (bkz. m_tested) gizli kalir -
+    // secer secmez asinma verisini gostermek "test etmeden bakim karari
+    // vermek" olurdu, profesyonel bir test surecine aykiri.
+    QString maintenanceStatusText() const { return m_tested ? m_maintenanceStatusText : QStringLiteral("HENÜZ TEST EDİLMEDİ"); }
+    QVariantList wearNotes() const { return m_tested ? m_wearNotes : QVariantList(); }
 
 signals:
     void devir1Changed();
@@ -124,6 +131,10 @@ private:
     double m_titresim = 0.0;
     AlarmLevel m_alarmLevel = AlarmLevel::Normal;
     QString m_maintenanceStatusText = QStringLiteral("SAĞLIKLI");
+    QVariantList m_wearNotes;
+    // Secili motor bu oturumda gercekten test edildi mi (calistirilip
+    // yag basinci oturana kadar) - test edilmeden teshis QML'e acilmaz.
+    bool m_tested = false;
 };
 
 #endif // ENGINEMODEL_H

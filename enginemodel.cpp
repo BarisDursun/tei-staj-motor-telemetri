@@ -2,6 +2,8 @@
 #include <QTimer>
 #include <QRandomGenerator>
 #include <QVariantMap>
+#include <QVector>
+#include <algorithm>
 
 namespace {
 
@@ -20,6 +22,33 @@ QString maintenanceStatusToText(MaintenanceStatus status) {
     case MaintenanceStatus::MaintenanceRequired: return QStringLiteral("BAKIM GEREKLİ");
     default:                                     return QStringLiteral("SAĞLIKLI");
     }
+}
+
+// WearDeviations'i, mutlak sapmasi esigi (%10) asan parametreleri en buyuk
+// sapma basta olacak sekilde okunabilir cumlelere cevirir - "bakim neden
+// gerekli" sorusuna somut cevap vermek icin (bkz. maintenanceStatusText).
+QVariantList buildWearNotes(const WearDeviations &d) {
+    struct Item { double pct; QString label; };
+    QVector<Item> items = {
+        {d.titresimPct,     QStringLiteral("Titreşim")},
+        {d.yagBasinciPct,   QStringLiteral("Yağ Basıncı")},
+        {d.egtPct,          QStringLiteral("EGT")},
+        {d.yagSicakligiPct, QStringLiteral("Yağ Sıcaklığı")},
+        {d.yakitPct,        QStringLiteral("Yakıt Akışı")},
+    };
+    std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
+        return qAbs(a.pct) > qAbs(b.pct);
+    });
+
+    const double threshold = 10.0;
+    QVariantList notes;
+    for (const auto &it : items) {
+        if (qAbs(it.pct) < threshold) continue;
+        const QString sign = it.pct >= 0 ? QStringLiteral("+") : QString();
+        notes << QStringLiteral("%1: referansa göre %2%3%")
+                     .arg(it.label, sign, QString::number(it.pct, 'f', 0));
+    }
+    return notes;
 }
 // Parametreye gore farkli buyuklukte rastgele carpan uretir (yuzde cinsinden
 // yayilim). Termal kutlesi yuksek olan parametreler (yag sicakligi) gercekte
@@ -61,16 +90,18 @@ void EngineModel::selectEngine(const QString &engineName) {
 }
 
 QVariantList EngineModel::fleetEngines() const {
+    // Kasitli olarak SADECE kimlik/yas bilgisi (bir filo kayit defterinde
+    // gorulebilecek turden) - bakim durumu burada YOK. Onceden gosterilirse
+    // operator hicbir motoru test etmeden hepsinin cevabini gormus olurdu,
+    // bu da "once test et, sonra karar ver" akisini anlamsizlastirirdi.
     QVariantList list;
     for (const auto &entry : kFleet) {
-        TF10000 probe(entry.ageYears);
         QVariantMap m;
         m["id"] = entry.id;
         m["ageYears"] = entry.ageYears;
         m["label"] = entry.ageYears <= 0.0f
             ? QStringLiteral("Motor #%1 (Sıfır km)").arg(entry.id)
             : QStringLiteral("Motor #%1 (%2 yıl)").arg(entry.id).arg(entry.ageYears, 0, 'f', 0);
-        m["maintenanceStatusText"] = maintenanceStatusToText(probe.GetMaintenanceStatus());
         list.append(m);
     }
     return list;
@@ -104,16 +135,22 @@ void EngineModel::resetSimulationStateFor(Engine *newEngine) {
     m_factorYagBasinci = 0.0;
     m_factorYagSicakligi = 0.0;
     m_factorTitresim = 0.0;
+    // Yeni motor bu oturumda henuz test edilmedi - teshis QML'e kapali kalir,
+    // gercekten calistirilip oturana kadar (bkz. simulationTick).
+    m_tested = false;
 
     if (newEngine) {
         newEngine->Engine_Start(0.0, 25.0);
         refreshFromEngine(/*withJitter=*/false);
 
-        const QString newText = maintenanceStatusToText(newEngine->GetMaintenanceStatus());
-        if (newText != m_maintenanceStatusText) {
-            m_maintenanceStatusText = newText;
-            emit maintenanceStatusChanged();
-        }
+        // Gercek teshis burada hesaplanip saklanir ama m_tested false oldugu
+        // surece disariya (maintenanceStatusText/wearNotes getter'lari
+        // uzerinden) acilmaz - motorun "gercek" durumu var olsa da, operator
+        // onu test etmeden gormemis sayilir. Sapma yuzdeleri (0 guctekiyle)
+        // motor calisirken her tikte guncellenmeye devam eder (bkz. simulationTick).
+        m_maintenanceStatusText = maintenanceStatusToText(newEngine->GetMaintenanceStatus());
+        m_wearNotes = buildWearNotes(newEngine->GetWearDeviations(0.0f));
+        emit maintenanceStatusChanged();
     }
 }
 
@@ -153,6 +190,28 @@ void EngineModel::simulationTick() {
 
     currentEngine->Engine_Start(m_actualPower / 100.0, 25.0);
     refreshFromEngine(/*withJitter=*/m_factorDevir1 > 0.01 || m_factorEgt > 0.01);
+
+    // Motor gercekten calisip oturunca (ayni esik: alarm degerlendirmesinin
+    // acildigi nokta) bu oturum icin "test edildi" sayilir - bakim teshisi
+    // artik QML'e acilir. Bir kere acildiktan sonra kapanmaz (spool-down'da
+    // bile son test sonucunu gostermeye devam eder, motor degistirilene kadar).
+    if (m_running && m_factorYagBasinci >= 0.97 && !m_tested) {
+        m_tested = true;
+        emit maintenanceStatusChanged();
+    }
+
+    // Test edildikten sonra sapma notlari GUNCEL guce gore surekli yenilenir -
+    // gaz kolu hareket ettikce yuzdeler de degisir (rolantide zayif, tam
+    // guçte belirgin - bkz. TF10000::WearScale). maintenanceStatusText
+    // (SAGLIKLI/IZLENMELI/BAKIM GEREKLI) kasitli olarak degismez, o motorun
+    // sabit yapisal durumunu yansitir.
+    if (m_tested) {
+        const QVariantList freshNotes = buildWearNotes(currentEngine->GetWearDeviations(static_cast<float>(m_actualPower / 100.0)));
+        if (freshNotes != m_wearNotes) {
+            m_wearNotes = freshNotes;
+            emit maintenanceStatusChanged();
+        }
+    }
 }
 
 void EngineModel::refreshFromEngine(bool withJitter) {
@@ -222,17 +281,17 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     currentEngine->param_YagSicakligi = static_cast<float>(yagSicakligi);
     currentEngine->param_Titresim     = static_cast<float>(titresim);
 
-    // Alarm degerlendirmesi SADECE motor "oturmus" sayilacak kadar spool
-    // olduysa yapilir (yag pompasi spool'u >= %60). Aksi halde iki durumda
-    // yanlis KRITIK cikardi: (1) motor tamamen kapaliyken yag basinci
-    // gercekci olarak 0 - "dusuk yag basinci" bant kontrolu bunu ariza sanir,
-    // (2) motor YENI baslatilirken (spool-up devam ederken) yag pompasi
-    // henuz tam hiza ulasmadigi icin basinc gecici olarak dusuk - gercek bir
-    // motorda da start sirasinda birkac saniye "dusuk yag basinci" alarmi
-    // verilmez, pompanin oturmasi beklenir. m_running=false oldugunda zaten
-    // spool geriye gidip bu esigin altina duser, o yuzden ayrica kontrol
-    // etmeye gerek yok.
-    if (m_factorYagBasinci >= 0.60) {
+    // Alarm degerlendirmesi SADECE yag basinci spool'u neredeyse tamamen
+    // bittiyse (%97+) yapilir. Onemli detay: gosterilen deger = hedef * faktor,
+    // yani faktor 0'dan 1'e dogrusal tirmanirken deger de ZORUNLU olarak
+    // "dusuk basinc" bandindan geciyor (0'dan baslayip yukari cikan her
+    // dogru, aradaki her degerden geçer) - dusuk bir esik (orn. %60) bu
+    // geciste hala yakalanirdi, cunku o anda gosterilen deger de hedefin
+    // sadece %60'i. Gercek ucaklarda da ayni sorun "start inhibit" mantigiyla
+    // cozulur: motor ilk calisirken belirli alarmlar pompa/basinc gercekten
+    // oturana kadar bilerek bastirilir. m_running=false oldugunda zaten
+    // spool geriye gidip bu esigin altina duser, ayrica kontrole gerek yok.
+    if (m_factorYagBasinci >= 0.97) {
         // EngineAlarmLevel ve AlarmLevel ayni sirada tanimli (Normal/Warning/Critical),
         // Engine sinifi Qt'ye bagimli olmasin diye kendi enum'unu dondurur.
         setAlarmLevel(static_cast<AlarmLevel>(currentEngine->EvaluateAlarm()));

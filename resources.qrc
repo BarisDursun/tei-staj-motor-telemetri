@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/qml">
         <file alias="Main.qml">qml/Main.qml</file>
+        <file alias="TrendGraph.qml">qml/TrendGraph.qml</file>
     </qresource>
 </RCC>
