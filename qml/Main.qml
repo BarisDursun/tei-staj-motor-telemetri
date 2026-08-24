@@ -6,7 +6,7 @@ import QtQuick.Layouts 1.15
 // dayaniyor: parametre ISIMLERI cyan, degerler normalken beyaz, esik
 // asilinca AMBER (uyari) / KIRMIZI (kritik) olur - degerin kendisi renk
 // degistirir, sabit dekoratif renk degil. Yuvarlak/arc gostergeler zaten
-// EICAS'ta N1/N2/EGT icin standart yontem (tape/bant degil), o yuzden
+// EICAS'ta N1/N2/EGT icin standart yontem (tape/bant degil),
 // korunuyor. Kaynak: Wikipedia "Electronic centralised aircraft monitor",
 // Aeroclass.org "EICAS", Pilot Institute "Round Dials or Glass Cockpits".
 ApplicationWindow {
