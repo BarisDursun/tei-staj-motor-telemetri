@@ -1,24 +1,21 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
-#include "enginemodel.h"
+#include "enginemodel.h" // C++ tarafındaki arka plan (backend) motor mantığımız
 
 int main(int argc, char *argv[]) {
-    // "basic" render loop ve native OpenGL'e zorlama denendi, bu makinedeki
-    // GPU/surucu kombinasyonunda beyaz flash/titreme sorununu cozmedi.
-    // Kesin cozum: GPU render'i tamamen devre disi birakip Qt Quick'i
-    // yazilimsal (raster) render'a zorlamak - donanim/surucu kaynakli hicbir
-    // flicker olmaz. Bu kadar basit bir arayuz icin performans farki
-    // hissedilmez. QGuiApplication olusmadan ONCE set edilmeli.
-    qputenv("QT_QUICK_BACKEND", "software");
+    qputenv("QT_QUICK_BACKEND", "software");   // GPU/sürücü kaynaklı ekran titremesi çözer
 
-    QGuiApplication app(argc, argv);
 
-    EngineModel engineModel;
+    QGuiApplication app(argc, argv);    // Qt GUI app başlatır
+    EngineModel engineModel;    //C++ Nesnesini Yarat
+    QQmlApplicationEngine engine;   //QML ekler
 
-    QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty("engineModel", &engineModel);
-    engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
+    // (C++ İLE QML KÖPRÜSÜ):
+    engine.rootContext()->setContextProperty("engineModel", &engineModel);  // C++'ta ürettiğimiz engineModeli, QML tarafına aynı isimle engineModel ismiyle bağlar
 
-    return app.exec();
+
+    engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));                 //UI yükler
+
+    return app.exec();   //loop
 }

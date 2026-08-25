@@ -21,6 +21,8 @@ ApplicationWindow {
     color: bgDeep
 
     // --- TEMA (EICAS renk kurallari) ---
+    // Bunlar root (ApplicationWindow) seviyesinde tanimli - alt bilesenlerden
+    // 'root.' onekine gerek olmadan dogrudan isimle (orn. "cyanC") erisilir.
     readonly property color bgDeep: "#0a0b0d"
     readonly property color bgPanel: "#15171b"
     readonly property color bgPanelAlt: "#1b1e23"
@@ -110,6 +112,8 @@ ApplicationWindow {
     onP_YagSicakligiChanged: anim_YagSicakligi = p_YagSicakligi
     onP_TitresimChanged: anim_Titresim = p_Titresim
 
+    // StackLayout: cocuklarindan sadece currentIndex'teki gorunur, digerleri
+    // arka planda var olmaya devam eder (gizlenir, yok edilmez).
     StackLayout {
         id: mainStack
         anchors.fill: parent
@@ -244,6 +248,9 @@ ApplicationWindow {
                             Layout.leftMargin: 14
                         }
 
+                        // TabBar/TabButton: 'checked' property'si TabBar tarafindan otomatik
+                        // yonetilir (hangi sekme aktifse o TabButton.checked=true olur) -
+                        // biz sadece bu deger ile cyan/gri renk ve alt cizgiyi kontrol ediyoruz.
                         TabBar {
                             id: tabBar
                             Layout.fillWidth: true
@@ -292,6 +299,8 @@ ApplicationWindow {
                             }
                         }
 
+                        // Motor secim ekranina (Sayfa 0) geri doner - calisan motoru durdurur,
+                        // gaz kolunu sifirlar, boylece bir sonraki motor temiz baslar.
                         Button {
                             text: "MOTOR DEĞİŞTİR"
                             Layout.fillHeight: true
@@ -335,6 +344,8 @@ ApplicationWindow {
                                     anchors.fill: parent; anchors.margins: 16; spacing: 12
                                     Text { text: selectedEngine + " KONTROL"; color: cyanC; font.bold: true; font.pixelSize: 12; Layout.alignment: Qt.AlignHCenter }
 
+                                    // enabled: !isEngineOn -> motor calisirken bu buton otomatik
+                                    // pasiflesir, tekrar baslatma komutu gonderilemez.
                                     Button {
                                         text: "MOTORU BAŞLAT"
                                         Layout.fillWidth: true; Layout.preferredHeight: 56; enabled: !isEngineOn
@@ -476,6 +487,8 @@ ApplicationWindow {
                                             property real warnStart: thDevir1Warn
                                             property real critStart: thDevir1Crit
 
+                                            // Canvas kendini otomatik yeniden cizmez - value degistiginde
+                                            // requestPaint() cagirilmazsa ibre eski yerinde donuk kalir.
                                             onValueChanged: requestPaint()
 
                                             onPaint: {
@@ -560,6 +573,11 @@ ApplicationWindow {
                                     }
                                 }
 
+                                // 6 sabit boyutlu parametre kutusu (Basinc, EGT, Yakit, Yag
+                                // Basinci, Yag Sicakligi, Titresim) - hepsi ayni kalibi
+                                // tekrarlar: cyan baslik + buyuk deger yazisi. Sadece esigi
+                                // olanlarda (EGT, Yag Basinci, Titresim) deger rengi
+                                // statusColor/statusColorRange ile dinamik degisir.
                                 GridLayout {
                                     columns: 3
                                     rowSpacing: 16; columnSpacing: 16

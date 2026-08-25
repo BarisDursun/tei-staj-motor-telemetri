@@ -5,17 +5,15 @@
 #include <QVector>
 #include <algorithm>
 
-namespace {
+namespace { // Bu bloktaki fonksiyonlar sadece bu .cpp dosyasından erişilebilir (Encapsulation).
 
-// TF10000 filosu: 0 (sifir km) ile 20 yil arasi cesitli yaslarda 10 sabit
-// motor - test senaryolarinin hem "saglikli" hem "bakim gerekli" ornekler
-// icermesi icin secildi (bkz. Engine::WearFactor yorumu).
 struct FleetEntry { int id; float ageYears; };
 constexpr FleetEntry kFleet[] = {
     {1, 0.0f}, {2, 1.0f}, {3, 2.0f}, {4, 3.0f}, {5, 5.0f},
     {6, 7.0f}, {7, 10.0f}, {8, 13.0f}, {9, 16.0f}, {10, 20.0f}
 };
 
+// Bakım durumunu QML arayüzünde gösterilecek metinlere çevirir.
 QString maintenanceStatusToText(MaintenanceStatus status) {
     switch (status) {
     case MaintenanceStatus::Watch:              return QStringLiteral("İZLENMELİ");
@@ -24,18 +22,17 @@ QString maintenanceStatusToText(MaintenanceStatus status) {
     }
 }
 
-// WearDeviations'i, mutlak sapmasi esigi (%10) asan parametreleri en buyuk
-// sapma basta olacak sekilde okunabilir cumlelere cevirir - "bakim neden
-// gerekli" sorusuna somut cevap vermek icin (bkz. maintenanceStatusText).
+// %10'dan fazla sapan değerleri filtreler ve QML'de listeletmek üzere formatlar.
 QVariantList buildWearNotes(const WearDeviations &d) {
     struct Item { double pct; QString label; };
     QVector<Item> items = {
-        {d.titresimPct,     QStringLiteral("Titreşim")},
-        {d.yagBasinciPct,   QStringLiteral("Yağ Basıncı")},
-        {d.egtPct,          QStringLiteral("EGT")},
-        {d.yagSicakligiPct, QStringLiteral("Yağ Sıcaklığı")},
-        {d.yakitPct,        QStringLiteral("Yakıt Akışı")},
-    };
+                            {d.titresimPct,     QStringLiteral("Titreşim")},
+                            {d.yagBasinciPct,   QStringLiteral("Yağ Basıncı")},
+                            {d.egtPct,          QStringLiteral("EGT")},
+                            {d.yagSicakligiPct, QStringLiteral("Yağ Sıcaklığı")},
+                            {d.yakitPct,        QStringLiteral("Yakıt Akışı")},
+                            };
+    // Sapma oranına göre büyükten küçüğe sıralar.
     std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
         return qAbs(a.pct) > qAbs(b.pct);
     });
@@ -50,18 +47,14 @@ QVariantList buildWearNotes(const WearDeviations &d) {
     }
     return notes;
 }
-// Parametreye gore farkli buyuklukte rastgele carpan uretir (yuzde cinsinden
-// yayilim). Termal kutlesi yuksek olan parametreler (yag sicakligi) gercekte
-// yavas degisir, titresim ise dogasi geregi en gurultulu olanidir - o yuzden
-// tum parametrelere ayni sabit gurultu uygulanmiyor.
+
+// Sensörlere gerçekçilik katar. Parametrenin karakterine göre rastgele dalgalanma (gürültü) üretir.
 double jitterFactor(double spreadPercent) {
     const double spread = spreadPercent / 100.0;
     return 1.0 + (QRandomGenerator::global()->generateDouble() - 0.5) * 2.0 * spread;
 }
 
-// Bir carpani (0..1) hedefe dogru, yon bazinda FARKLI zaman sabitiyle
-// (rise/fall, saniye) ilerletir - gercek motorlarda yukselis ve dusus
-// ayni hizda olmadigi icin (bkz. engine_core.h SpoolProfile yorumu).
+// Fiziksel atalet (spool) hesabı. Mevcut değeri hedef değere belirlenen sürede yumuşakça yaklaştırır.
 double approachFactor(double current, double target, double riseSeconds, double fallSeconds, double tickSeconds) {
     const double timeConstant = (target > current) ? riseSeconds : fallSeconds;
     const double step = tickSeconds / qMax(timeConstant, 0.001);
@@ -71,37 +64,36 @@ double approachFactor(double current, double target, double riseSeconds, double 
 
 EngineModel::EngineModel(QObject *parent) : QObject(parent) {
     m_simTimer = new QTimer(this);
+    // Her 200ms'de bir simulationTick fonksiyonunu tetikler (Simülasyonun kalp atışı).
     connect(m_simTimer, &QTimer::timeout, this, &EngineModel::simulationTick);
     m_simTimer->start(200);
 }
 
 EngineModel::~EngineModel() {
-    delete currentEngine;
+    delete currentEngine; // Bellek sızıntısını önler.
 }
 
 void EngineModel::selectEngine(const QString &engineName) {
     delete currentEngine;
     currentEngine = nullptr;
 
+    // Polimorfizm devrede: Seçilen isme göre doğru motor sınıfı yaratılır.
     if (engineName == "TF10000") currentEngine = new TF10000();
     else if (engineName == "PD170") currentEngine = new PD170();
 
     resetSimulationStateFor(currentEngine);
 }
 
+// QML arayüzündeki filo listesini dolduran fonksiyon.
 QVariantList EngineModel::fleetEngines() const {
-    // Kasitli olarak SADECE kimlik/yas bilgisi (bir filo kayit defterinde
-    // gorulebilecek turden) - bakim durumu burada YOK. Onceden gosterilirse
-    // operator hicbir motoru test etmeden hepsinin cevabini gormus olurdu,
-    // bu da "once test et, sonra karar ver" akisini anlamsizlastirirdi.
     QVariantList list;
     for (const auto &entry : kFleet) {
         QVariantMap m;
         m["id"] = entry.id;
         m["ageYears"] = entry.ageYears;
         m["label"] = entry.ageYears <= 0.0f
-            ? QStringLiteral("Motor #%1 (Sıfır km)").arg(entry.id)
-            : QStringLiteral("Motor #%1 (%2 yıl)").arg(entry.id).arg(entry.ageYears, 0, 'f', 0);
+                         ? QStringLiteral("Motor #%1 (Sıfır km)").arg(entry.id)
+                         : QStringLiteral("Motor #%1 (%2 yıl)").arg(entry.id).arg(entry.ageYears, 0, 'f', 0);
         list.append(m);
     }
     return list;
@@ -116,14 +108,12 @@ void EngineModel::selectFleetEngine(int fleetId) {
     if (!found) return;
 
     delete currentEngine;
-    currentEngine = new TF10000(ageYears);
+    currentEngine = new TF10000(ageYears); // Yaş verisiyle yıpranmış motor simülasyonu başlar.
     resetSimulationStateFor(currentEngine);
 }
 
 void EngineModel::resetSimulationStateFor(Engine *newEngine) {
-    // Yeni secilen motor tamamen kapali durumda baslar - onceki motordan
-    // kalma degerlerin bir sonraki tike kadar ekranda kalmamasi icin
-    // durumu sifirlayip hemen bir kez yeniliyoruz.
+    // Motor değiştiğinde eski değerlerin ekranda kalmaması için her şey sıfırlanır.
     m_running = false;
     m_targetPower = 0.0;
     m_actualPower = 0.0;
@@ -135,45 +125,35 @@ void EngineModel::resetSimulationStateFor(Engine *newEngine) {
     m_factorYagBasinci = 0.0;
     m_factorYagSicakligi = 0.0;
     m_factorTitresim = 0.0;
-    // Yeni motor bu oturumda henuz test edilmedi - teshis QML'e kapali kalir,
-    // gercekten calistirilip oturana kadar (bkz. simulationTick).
     m_tested = false;
 
     if (newEngine) {
         newEngine->Engine_Start(0.0, 25.0);
-        refreshFromEngine(/*withJitter=*/false);
+        refreshFromEngine(/*withJitter=*/false); // İlk frame'i temiz (gürültüsüz) çizer.
 
-        // Gercek teshis burada hesaplanip saklanir ama m_tested false oldugu
-        // surece disariya (maintenanceStatusText/wearNotes getter'lari
-        // uzerinden) acilmaz - motorun "gercek" durumu var olsa da, operator
-        // onu test etmeden gormemis sayilir. Sapma yuzdeleri (0 guctekiyle)
-        // motor calisirken her tikte guncellenmeye devam eder (bkz. simulationTick).
         m_maintenanceStatusText = maintenanceStatusToText(newEngine->GetMaintenanceStatus());
         m_wearNotes = buildWearNotes(newEngine->GetWearDeviations(0.0f));
         emit maintenanceStatusChanged();
     }
 }
 
-void EngineModel::setPower(double powerPercent) {
-    m_targetPower = powerPercent;
-}
-
-void EngineModel::startEngine() {
-    m_running = true;
-}
-
+// Hedef gücü ayarlar (Örneğin QML'deki bir Slider'dan gelir).
+void EngineModel::setPower(double powerPercent) { m_targetPower = powerPercent; }
+void EngineModel::startEngine() { m_running = true; }
 void EngineModel::stopEngine() {
     m_running = false;
     m_targetPower = 0.0;
 }
 
+// SİSTEMİN KALBİ: QTimer tarafından saniyede 5 kez çağrılır.
 void EngineModel::simulationTick() {
     if (!currentEngine) return;
 
     const double spoolTarget = m_running ? 1.0 : 0.0;
-    const double tick = 0.2; // m_simTimer araligi (saniye)
+    const double tick = 0.2; // 200ms = 0.2 saniye
     const SpoolProfile p = currentEngine->GetSpoolProfile();
 
+    // Motor parametrelerinin fiziksel ataletlerini hesaplar.
     m_factorDevir1       = approachFactor(m_factorDevir1,       spoolTarget, p.devir1Rise,       p.devir1Fall,       tick);
     m_factorDevir2       = approachFactor(m_factorDevir2,       spoolTarget, p.devir2Rise,       p.devir2Fall,       tick);
     m_factorBasinc       = approachFactor(m_factorBasinc,       spoolTarget, p.basincRise,       p.basincFall,       tick);
@@ -183,28 +163,22 @@ void EngineModel::simulationTick() {
     m_factorYagSicakligi = approachFactor(m_factorYagSicakligi, spoolTarget, p.yagSicakligiRise, p.yagSicakligiFall, tick);
     m_factorTitresim     = approachFactor(m_factorTitresim,     spoolTarget, p.titresimRise,     p.titresimFall,     tick);
 
-    // Gerceklesen guc, gaz kolu hedefine dogru asamali yaklasir (throttle tepkisi
-    // mekanik spool'dan daha hizli - gercek bir turbinde de guc degisimi boyle olur).
+    // Gerçekleşen güç, gaz kolu hedefine doğru adım adım ilerler.
     const double powerStep = 4.0;
     m_actualPower += qBound(-powerStep, m_targetPower - m_actualPower, powerStep);
 
+    // Çekirdek motor modeli güncellenir.
     currentEngine->Engine_Start(m_actualPower / 100.0, 25.0);
+    // Motor duruyorken bile çok ufak değerlerde sensör titremesi olması engellenir (Jitter filtresi).
     refreshFromEngine(/*withJitter=*/m_factorDevir1 > 0.01 || m_factorEgt > 0.01);
 
-    // Motor gercekten calisip oturunca (ayni esik: alarm degerlendirmesinin
-    // acildigi nokta) bu oturum icin "test edildi" sayilir - bakim teshisi
-    // artik QML'e acilir. Bir kere acildiktan sonra kapanmaz (spool-down'da
-    // bile son test sonucunu gostermeye devam eder, motor degistirilene kadar).
+    // "Start Inhibit": Yağ basıncı %97'ye ulaşana kadar test tamamlanmış sayılmaz.
     if (m_running && m_factorYagBasinci >= 0.97 && !m_tested) {
         m_tested = true;
         emit maintenanceStatusChanged();
     }
 
-    // Test edildikten sonra sapma notlari GUNCEL guce gore surekli yenilenir -
-    // gaz kolu hareket ettikce yuzdeler de degisir (rolantide zayif, tam
-    // guçte belirgin - bkz. TF10000::WearScale). maintenanceStatusText
-    // (SAGLIKLI/IZLENMELI/BAKIM GEREKLI) kasitli olarak degismez, o motorun
-    // sabit yapisal durumunu yansitir.
+    // Gaz kolu (power) değiştikçe yıpranma sapmalarının güncel etkisini hesaplar.
     if (m_tested) {
         const QVariantList freshNotes = buildWearNotes(currentEngine->GetWearDeviations(static_cast<float>(m_actualPower / 100.0)));
         if (freshNotes != m_wearNotes) {
@@ -214,6 +188,7 @@ void EngineModel::simulationTick() {
     }
 }
 
+// Fiziksel değerleri UI (Arayüz) değerlerine çevirir.
 void EngineModel::refreshFromEngine(bool withJitter) {
     double devir1       = currentEngine->param_Devir1;
     double devir2       = currentEngine->param_Devir2;
@@ -224,7 +199,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     double yagSicakligi = currentEngine->param_YagSicakligi;
     double titresim     = currentEngine->param_Titresim;
 
-    if (withJitter) {
+    if (withJitter) { // Her sensörün kendi karakteristiğine göre gürültü eklenir.
         devir1       *= jitterFactor(0.8);
         devir2       *= jitterFactor(0.8);
         basinc       *= jitterFactor(1.5);
@@ -235,9 +210,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
         titresim     *= jitterFactor(6.0);
     }
 
-    // Motor kapaliyken/spool asamasindayken her deger KENDI carpanina gore
-    // olceklenir - her parametrenin gercek hayattaki ataleti/isil kutlesi farkli
-    // oldugu icin farkli hizda spool oluyor (bkz. engine_core.h SpoolProfile).
+    // Atalet çarpanları ile nihai gösterim değerleri çarpılır.
     devir1       *= m_factorDevir1;
     devir2       *= m_factorDevir2;
     basinc       *= m_factorBasinc;
@@ -247,9 +220,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     yagSicakligi *= m_factorYagSicakligi;
     titresim     *= m_factorTitresim;
 
-    // Jitter (gurultu) %100 guctekiyle carpilinca, tavan degerin hafifce
-    // ustune cikabilir (orn. "%100.2" gibi fiziksel olarak anlamsiz bir
-    // okuma) - motorun gercek tavanini asamayacak sekilde sinirliyoruz.
+    // Gürültü yüzünden değerlerin fiziksel sınırları (tavanı) aşması engellenir.
     const ParamCeilings ceil = currentEngine->GetParamCeilings();
     devir1       = qMin(devir1,       ceil.devir1);
     devir2       = qMin(devir2,       ceil.devir2);
@@ -260,6 +231,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     yagSicakligi = qMin(yagSicakligi, ceil.yagSicakligi);
     titresim     = qMin(titresim,     ceil.titresim);
 
+    // Q_PROPERTY setter fonksiyonları çağrılır, böylece QML'e "değer değişti" sinyalleri gider.
     setDevir1(devir1);
     setDevir2(devir2);
     setBasinc(basinc);
@@ -269,9 +241,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     setYagSicakligi(yagSicakligi);
     setTitresim(titresim);
 
-    // Alarm degerlendirmesi de gosterilen (spool+jitter uygulanmis) degerlerle
-    // tutarli olsun diye Engine'in kendi alanlarini gosterilen degerlere esitleyip
-    // oyle EvaluateAlarm() cagiriyoruz.
+    // Çekirdek modele gürültülü ve ataletli değerleri geri besliyoruz ki alarm değerlendirmesi doğru çalışsın.
     currentEngine->param_Devir1       = static_cast<float>(devir1);
     currentEngine->param_Devir2       = static_cast<float>(devir2);
     currentEngine->param_Basinc       = static_cast<float>(basinc);
@@ -281,19 +251,8 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     currentEngine->param_YagSicakligi = static_cast<float>(yagSicakligi);
     currentEngine->param_Titresim     = static_cast<float>(titresim);
 
-    // Alarm degerlendirmesi SADECE yag basinci spool'u neredeyse tamamen
-    // bittiyse (%97+) yapilir. Onemli detay: gosterilen deger = hedef * faktor,
-    // yani faktor 0'dan 1'e dogrusal tirmanirken deger de ZORUNLU olarak
-    // "dusuk basinc" bandindan geciyor (0'dan baslayip yukari cikan her
-    // dogru, aradaki her degerden geçer) - dusuk bir esik (orn. %60) bu
-    // geciste hala yakalanirdi, cunku o anda gosterilen deger de hedefin
-    // sadece %60'i. Gercek ucaklarda da ayni sorun "start inhibit" mantigiyla
-    // cozulur: motor ilk calisirken belirli alarmlar pompa/basinc gercekten
-    // oturana kadar bilerek bastirilir. m_running=false oldugunda zaten
-    // spool geriye gidip bu esigin altina duser, ayrica kontrole gerek yok.
+    // Motor çalışırken yağ basıncı henüz tam oturmadıysa, geçici "düşük basınç" alarmlarını bastırıyoruz.
     if (m_factorYagBasinci >= 0.97) {
-        // EngineAlarmLevel ve AlarmLevel ayni sirada tanimli (Normal/Warning/Critical),
-        // Engine sinifi Qt'ye bagimli olmasin diye kendi enum'unu dondurur.
         setAlarmLevel(static_cast<AlarmLevel>(currentEngine->EvaluateAlarm()));
     } else {
         setAlarmLevel(AlarmLevel::Normal);
@@ -315,8 +274,8 @@ void EngineModel::setAlarmLevel(AlarmLevel v) {
     }
 }
 
-// +1.0 kaydirmasi qFuzzyCompare'in sifira yakin degerlerde saglikli
-// calismamasini (relative fark tanimsizlasir) onlemek icin kullanilir.
+// UI gereksiz yere güncellenmesin diye, sadece değer gerçekten değiştiğinde sinyal (emit) fırlatır.
+// +1.0 eklenmesinin sebebi: qFuzzyCompare fonksiyonunun 0'a çok yakın kayan noktalı sayılarda hata vermesini önlemektir.
 void EngineModel::setDevir1(double v)       { if (!qFuzzyCompare(m_devir1 + 1.0, v + 1.0))       { m_devir1 = v;       emit devir1Changed(); } }
 void EngineModel::setDevir2(double v)       { if (!qFuzzyCompare(m_devir2 + 1.0, v + 1.0))       { m_devir2 = v;       emit devir2Changed(); } }
 void EngineModel::setBasinc(double v)       { if (!qFuzzyCompare(m_basinc + 1.0, v + 1.0))       { m_basinc = v;       emit basincChanged(); } }
