@@ -1,11 +1,11 @@
-#include "enginemodel.h"
+#include "enginemodel.h"                                //Bridge / ViewMode   src
 #include <QTimer>
 #include <QRandomGenerator>
 #include <QVariantMap>
 #include <QVector>
 #include <algorithm>
 
-namespace { // Bu bloktaki fonksiyonlar sadece bu .cpp dosyasından erişilebilir (Encapsulation).
+namespace { // sadece bu .cpp dosyasından erişilebilir
 
 struct FleetEntry { int id; float ageYears; };
 constexpr FleetEntry kFleet[] = {
@@ -22,7 +22,7 @@ QString maintenanceStatusToText(MaintenanceStatus status) {
     }
 }
 
-// %10'dan fazla sapan değerleri filtreler ve QML'de listeletmek üzere formatlar.
+// %10'dan fazla sapan değerleri filtreler ve QML'de solda göstericez
 QVariantList buildWearNotes(const WearDeviations &d) {
     struct Item { double pct; QString label; };
     QVector<Item> items = {
@@ -48,13 +48,13 @@ QVariantList buildWearNotes(const WearDeviations &d) {
     return notes;
 }
 
-// Sensörlere gerçekçilik katar. Parametrenin karakterine göre rastgele dalgalanma (gürültü) üretir.
+//  Parametrenin karakterine göre rastgele dalgalanma (gürültü) üretir.
 double jitterFactor(double spreadPercent) {
     const double spread = spreadPercent / 100.0;
     return 1.0 + (QRandomGenerator::global()->generateDouble() - 0.5) * 2.0 * spread;
 }
 
-// Fiziksel atalet (spool) hesabı. Mevcut değeri hedef değere belirlenen sürede yumuşakça yaklaştırır.
+// Fiziksel atalet hesabı. Mevcut değeri hedef yavaşca yaklaştırır.
 double approachFactor(double current, double target, double riseSeconds, double fallSeconds, double tickSeconds) {
     const double timeConstant = (target > current) ? riseSeconds : fallSeconds;
     const double step = tickSeconds / qMax(timeConstant, 0.001);
@@ -62,22 +62,23 @@ double approachFactor(double current, double target, double riseSeconds, double 
 }
 }
 
+//Constructor
 EngineModel::EngineModel(QObject *parent) : QObject(parent) {
     m_simTimer = new QTimer(this);
-    // Her 200ms'de bir simulationTick fonksiyonunu tetikler (Simülasyonun kalp atışı).
-    connect(m_simTimer, &QTimer::timeout, this, &EngineModel::simulationTick);
-    m_simTimer->start(200);
-}
+    connect(m_simTimer, &QTimer::timeout, this, &EngineModel::simulationTick); //Qt'nin Signal kur
+    m_simTimer->start(200);  //0.2 saniye loop
 
+}
+//destructor
 EngineModel::~EngineModel() {
     delete currentEngine; // Bellek sızıntısını önler.
 }
 
+// Polimorfizm devrede: Seçilen isme göre doğru motor sınıfı yaratılır.      3
 void EngineModel::selectEngine(const QString &engineName) {
     delete currentEngine;
     currentEngine = nullptr;
 
-    // Polimorfizm devrede: Seçilen isme göre doğru motor sınıfı yaratılır.
     if (engineName == "TF10000") currentEngine = new TF10000();
     else if (engineName == "PD170") currentEngine = new PD170();
 
@@ -98,7 +99,7 @@ QVariantList EngineModel::fleetEngines() const {
     }
     return list;
 }
-
+//filo listesinden bir motor seçildiğinde çalışır           4
 void EngineModel::selectFleetEngine(int fleetId) {
     float ageYears = 0.0f;
     bool found = false;
@@ -108,12 +109,13 @@ void EngineModel::selectFleetEngine(int fleetId) {
     if (!found) return;
 
     delete currentEngine;
-    currentEngine = new TF10000(ageYears); // Yaş verisiyle yıpranmış motor simülasyonu başlar.
-    resetSimulationStateFor(currentEngine);
+    currentEngine = new TF10000(ageYears); // Yaş verisiyle yıpranmış motor simülasyonu başlar.(şu anlık sadece turbofanda)
+    resetSimulationStateFor(currentEngine);  //en son reset
 }
 
+
+// Motor değiştiğinde verileri sıfırlar
 void EngineModel::resetSimulationStateFor(Engine *newEngine) {
-    // Motor değiştiğinde eski değerlerin ekranda kalmaması için her şey sıfırlanır.
     m_running = false;
     m_targetPower = 0.0;
     m_actualPower = 0.0;
@@ -139,13 +141,13 @@ void EngineModel::resetSimulationStateFor(Engine *newEngine) {
 
 // Hedef gücü ayarlar (Örneğin QML'deki bir Slider'dan gelir).
 void EngineModel::setPower(double powerPercent) { m_targetPower = powerPercent; }
-void EngineModel::startEngine() { m_running = true; }
-void EngineModel::stopEngine() {
+void EngineModel::startEngine() { m_running = true; }      //motor başlatır            5
+void EngineModel::stopEngine() {                    //9
     m_running = false;
     m_targetPower = 0.0;
 }
 
-// SİSTEMİN KALBİ: QTimer tarafından saniyede 5 kez çağrılır.
+// SİSTEMİN KALBİ: QTimer tarafından saniyede 5 kez çağrılır.                    6
 void EngineModel::simulationTick() {
     if (!currentEngine) return;
 
@@ -163,22 +165,21 @@ void EngineModel::simulationTick() {
     m_factorYagSicakligi = approachFactor(m_factorYagSicakligi, spoolTarget, p.yagSicakligiRise, p.yagSicakligiFall, tick);
     m_factorTitresim     = approachFactor(m_factorTitresim,     spoolTarget, p.titresimRise,     p.titresimFall,     tick);
 
-    // Gerçekleşen güç, gaz kolu hedefine doğru adım adım ilerler.
+    // Gerçekleşen güç, gaz kolu hedefine doğru yavaşca ilerler.
     const double powerStep = 4.0;
     m_actualPower += qBound(-powerStep, m_targetPower - m_actualPower, powerStep);
 
-    // Çekirdek motor modeli güncellenir.
-    currentEngine->Engine_Start(m_actualPower / 100.0, 25.0);
-    // Motor duruyorken bile çok ufak değerlerde sensör titremesi olması engellenir (Jitter filtresi).
-    refreshFromEngine(/*withJitter=*/m_factorDevir1 > 0.01 || m_factorEgt > 0.01);
 
-    // "Start Inhibit": Yağ basıncı %97'ye ulaşana kadar test tamamlanmış sayılmaz.
-    if (m_running && m_factorYagBasinci >= 0.97 && !m_tested) {
+    currentEngine->Engine_Start(m_actualPower / 100.0, 25.0);// Çekirdek motor modeli güncellenir.
+    refreshFromEngine(/*withJitter=*/m_factorDevir1 > 0.01 || m_factorEgt > 0.01);    // Motor duruyorken sensör titremesi engeller
+
+    //  Yağ basıncı oturana kadar test tamamlanmış sayılmaz.  sonra test biter               7
+    if (m_running && m_factorYagBasinci >= 0.97 && !m_tested) {  //gürültü payıda var %97
         m_tested = true;
         emit maintenanceStatusChanged();
     }
 
-    // Gaz kolu (power) değiştikçe yıpranma sapmalarının güncel etkisini hesaplar.
+    // Gaz kolu (power) değiştikçe yıpranma sapmasını hesaplar                           8
     if (m_tested) {
         const QVariantList freshNotes = buildWearNotes(currentEngine->GetWearDeviations(static_cast<float>(m_actualPower / 100.0)));
         if (freshNotes != m_wearNotes) {
@@ -188,7 +189,7 @@ void EngineModel::simulationTick() {
     }
 }
 
-// Fiziksel değerleri UI (Arayüz) değerlerine çevirir.
+// Fiziksel değerleri UI  değerlerine çevirir.
 void EngineModel::refreshFromEngine(bool withJitter) {
     double devir1       = currentEngine->param_Devir1;
     double devir2       = currentEngine->param_Devir2;
@@ -220,7 +221,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     yagSicakligi *= m_factorYagSicakligi;
     titresim     *= m_factorTitresim;
 
-    // Gürültü yüzünden değerlerin fiziksel sınırları (tavanı) aşması engellenir.
+    // Gürültü yüzünden fiziksel tavanın aşılması  engellenir.
     const ParamCeilings ceil = currentEngine->GetParamCeilings();
     devir1       = qMin(devir1,       ceil.devir1);
     devir2       = qMin(devir2,       ceil.devir2);
@@ -251,7 +252,7 @@ void EngineModel::refreshFromEngine(bool withJitter) {
     currentEngine->param_YagSicakligi = static_cast<float>(yagSicakligi);
     currentEngine->param_Titresim     = static_cast<float>(titresim);
 
-    // Motor çalışırken yağ basıncı henüz tam oturmadıysa, geçici "düşük basınç" alarmlarını bastırıyoruz.
+    // Motor çalışırken yağ basıncı henüz tam oturmadıysa, geçici "düşük basınç" alarmı ver
     if (m_factorYagBasinci >= 0.97) {
         setAlarmLevel(static_cast<AlarmLevel>(currentEngine->EvaluateAlarm()));
     } else {
@@ -274,7 +275,8 @@ void EngineModel::setAlarmLevel(AlarmLevel v) {
     }
 }
 
-// UI gereksiz yere güncellenmesin diye, sadece değer gerçekten değiştiğinde sinyal (emit) fırlatır.
+// UI  sadece değer gerçekten değiştiğinde sinyal (emit) fırlatır
+//0 a yakınlık için kullandık
 // +1.0 eklenmesinin sebebi: qFuzzyCompare fonksiyonunun 0'a çok yakın kayan noktalı sayılarda hata vermesini önlemektir.
 void EngineModel::setDevir1(double v)       { if (!qFuzzyCompare(m_devir1 + 1.0, v + 1.0))       { m_devir1 = v;       emit devir1Changed(); } }
 void EngineModel::setDevir2(double v)       { if (!qFuzzyCompare(m_devir2 + 1.0, v + 1.0))       { m_devir2 = v;       emit devir2Changed(); } }
