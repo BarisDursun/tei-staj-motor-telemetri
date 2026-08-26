@@ -175,66 +175,86 @@ public:
         };
     }
 };
-
-
-
-
-// Pistonlu/Dizel Motor Sınıfı -inheritance-
+// PD170 Sınıfı İçine Eklenecek Yıpranma Sabitleri
+// PD170 Sınıfı--
 class PD170 : public Engine {
 public:
-    PD170() : Engine("PD170") {}
+    // PD170 için filo/yaş değişkeni
+    explicit PD170(float ageYears = 0.0f) : Engine("PD170") { this->ageYears = ageYears; }
 
+    // Turbodizel Yıpranma Çarpanları
+    static constexpr float WEAR_YAKIT = 0.08f;
+    static constexpr float WEAR_YAG_BASINCI = -0.20f;
+    static constexpr float WEAR_YAG_SICAKLIGI = 0.12f;
+    static constexpr float WEAR_TITRESIM = 0.80f;
+    static constexpr float WEAR_EGT = 0.10f;
+    static constexpr float WEAR_BASINC = 0.05f;
 
-    void Engine_Start(float power, float lm35Temp) override {    // PD170 e özel Parametre aralıkları
+    static float WearScale(float power) { return 0.2f + 0.8f * power; }
+
+    void Engine_Start(float power, float lm35Temp) override {
         if (power < 0.0f) power = 0.0f;
         if (power > 1.0f) power = 1.0f;
         powerLevel = power;
+        const float w = WearFactor() * WearScale(power);
 
         param_Devir1 = 1000.0f + (power * 1800.0f);
-        param_Devir2 = 70.0f + (power * 35.0f);    // DİKKAT !!!: Bu motorda RPM değil, soğutma suyu sıcaklığıdır.
-        param_Basinc = 1.0f  + (power * 1.6f);
-        param_EGT    = 250.0f + (power * 350.0f) + (lm35Temp - 25.0f);
-        param_Yakit  = 4.0f  + (power * 32.0f);
-        param_YagBasinci   = 2.5f  + (power * 3.0f);
-        param_YagSicakligi = 70.0f + (power * 45.0f);
-        param_Titresim     = 1.0f  + (power * 2.0f);
+        param_Devir2 = 70.0f + (power * 35.0f);
+        param_Basinc = (1.0f  + (power * 1.6f)) * (1.0f + w * WEAR_BASINC);
+        param_EGT    = (250.0f + (power * 350.0f) + (lm35Temp - 25.0f)) * (1.0f + w * WEAR_EGT);
+        param_Yakit  = (4.0f  + (power * 32.0f)) * (1.0f + w * WEAR_YAKIT);
+        param_YagBasinci   = (2.5f  + (power * 3.0f)) * (1.0f + w * WEAR_YAG_BASINCI);
+        param_YagSicakligi = (70.0f + (power * 45.0f)) * (1.0f + w * WEAR_YAG_SICAKLIGI);
+        param_Titresim     = (1.0f  + (power * 2.0f)) * (1.0f + w * WEAR_TITRESIM);
     }
 
-
-    EngineAlarmLevel EvaluateAlarm() const override {      // PD170 için spesifik tehlike eşikleri.
+    EngineAlarmLevel EvaluateAlarm() const override {
         EngineAlarmLevel level = EngineAlarmLevel::Normal;
         level = worstOf(level, bandHigh(param_Devir1, 2500.0f, 2800.0f));
-        level = worstOf(level, bandHigh(param_Devir2, 100.0f, 120.0f));        // Soğutma suyu harareti kontrolü
+        level = worstOf(level, bandHigh(param_Devir2, 100.0f, 120.0f));
         level = worstOf(level, bandRange(param_YagBasinci, 2.0f, 1.5f, 5.8f, 6.0f));
         level = worstOf(level, bandHigh(param_Titresim, 2.2f, 2.7f));
         level = worstOf(level, bandHigh(param_EGT, 480.0f, 550.0f));
         return level;
     }
 
-
-    SpoolProfile GetSpoolProfile() const override {    // PD170 için atalet süreleri (Kompresyon frenlemesi varmış devir hızlı düşüyor)
+    SpoolProfile GetSpoolProfile() const override {
         return SpoolProfile{
-            3.0,  5.0,   // devir1 (Krank RPM): Atalet düşük kompresyon freni var
-            90.0, 200.0, // devir2 (Su Sıcaklığı): Termal yavaş değişir.
-            1.0,  1.0,   // basinc: Kelebek tepkisi anlık.
-            5.0,  15.0,  // egt: Egzoz gazı, hızlı düşer
-            1.0,  0.5,   // yakit
-            3.0,  5.0,   // yagBasinci: Direkt RPM'e bağlı, hızlı düşer.
-            80.0, 220.0, // yagSicakligi
-            3.0,  5.0    // titresim
+            /*devir1Rise*/       3.0,  /*devir1Fall*/        5.0,
+            /*devir2Rise*/       90.0, /*devir2Fall*/        200.0,
+            /*basincRise*/       1.0,  /*basincFall*/        1.0,
+            /*egtRise*/          5.0,  /*egtFall*/           15.0,
+            /*yakitRise*/        1.0,  /*yakitFall*/         0.5,
+            /*yagBasinciRise*/   3.0,  /*yagBasinciFall*/    5.0,
+            /*yagSicakligiRise*/ 80.0, /*yagSicakligiFall*/  220.0,
+            /*titresimRise*/     3.0,  /*titresimFall*/      5.0
         };
     }
 
-    ParamCeilings GetParamCeilings() const override {   // Maksimum güçteki tavan değerleri
+    ParamCeilings GetParamCeilings() const override {
+        const float w = WearFactor();
         return ParamCeilings{
-            2800.0, 105.0, 2.6, 600.0,
-            36.0, 5.5, 115.0, 3.0
+            /*devir1*/ 2800.0, /*devir2*/ 105.0,
+            /*basinc*/ 2.6 * (1.0 + w * WEAR_BASINC),
+            /*egt*/ 600.0 * (1.0 + w * WEAR_EGT),
+            /*yakit*/ 36.0 * (1.0 + w * WEAR_YAKIT),
+            /*yagBasinci*/ 5.5 * (1.0 + w * WEAR_YAG_BASINCI),
+            /*yagSicakligi*/ 115.0 * (1.0 + w * WEAR_YAG_SICAKLIGI),
+            /*titresim*/ 3.0 * (1.0 + w * WEAR_TITRESIM)
         };
     }
 
-    // PD170 için henüz yıpranma modeli EKLEMEDİK EKLİCEZ ŞU ANLIK 0
-    WearDeviations GetWearDeviations(float /*power*/) const override {
-        return WearDeviations{0.0, 0.0, 0.0, 0.0, 0.0};
+    WearDeviations GetWearDeviations(float power) const override {
+        if (power < 0.0f) power = 0.0f;
+        if (power > 1.0f) power = 1.0f;
+        const double w = WearFactor() * WearScale(power);
+        return WearDeviations{
+            w * WEAR_EGT * 100.0,
+            w * WEAR_YAKIT * 100.0,
+            w * WEAR_YAG_BASINCI * 100.0,
+            w * WEAR_YAG_SICAKLIGI * 100.0,
+            w * WEAR_TITRESIM * 100.0
+        };
     }
 };
 
