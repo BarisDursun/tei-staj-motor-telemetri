@@ -190,8 +190,9 @@ public:
     static constexpr float WEAR_EGT = 0.10f;
     static constexpr float WEAR_BASINC = 0.05f;
 
-    static float WearScale(float power) { return 0.2f + 0.8f * power; }
+    static float WearScale(float power) { return 0.2f + 0.8f * power; } // TF10000'e göre rölantide biraz daha fazla etki bırakıyor.
 
+    // PD170'in fiziksel tepki modeli - kalıp TF10000 ile aynı: [güce bağlı taban] * [1 + yıpranma*katsayı].
     void Engine_Start(float power, float lm35Temp) override {
         if (power < 0.0f) power = 0.0f;
         if (power > 1.0f) power = 1.0f;
@@ -199,8 +200,8 @@ public:
         const float w = WearFactor() * WearScale(power);
 
         param_Devir1 = 1000.0f + (power * 1800.0f);
-        param_Devir2 = 70.0f + (power * 35.0f);
-        param_Basinc = (1.0f  + (power * 1.6f)) * (1.0f + w * WEAR_BASINC);
+        param_Devir2 = 70.0f + (power * 35.0f); // DİKKAT: Bu motorda RPM değil, soğutma suyu sıcaklığıdır.
+        param_Basinc = (1.0f  + (power * 1.6f)) * (1.0f + w * WEAR_BASINC); // WEAR_BASINC sadece PD170'de var (turbo basıncı yıpranmadan etkilenir).
         param_EGT    = (250.0f + (power * 350.0f) + (lm35Temp - 25.0f)) * (1.0f + w * WEAR_EGT);
         param_Yakit  = (4.0f  + (power * 32.0f)) * (1.0f + w * WEAR_YAKIT);
         param_YagBasinci   = (2.5f  + (power * 3.0f)) * (1.0f + w * WEAR_YAG_BASINCI);
@@ -208,30 +209,30 @@ public:
         param_Titresim     = (1.0f  + (power * 2.0f)) * (1.0f + w * WEAR_TITRESIM);
     }
 
-    EngineAlarmLevel EvaluateAlarm() const override {
+    EngineAlarmLevel EvaluateAlarm() const override {    // PD170 için spesifik tehlike eşikleri.
         EngineAlarmLevel level = EngineAlarmLevel::Normal;
         level = worstOf(level, bandHigh(param_Devir1, 2500.0f, 2800.0f));
-        level = worstOf(level, bandHigh(param_Devir2, 100.0f, 120.0f));
+        level = worstOf(level, bandHigh(param_Devir2, 100.0f, 120.0f));  // Soğutma suyu harareti kontrolü
         level = worstOf(level, bandRange(param_YagBasinci, 2.0f, 1.5f, 5.8f, 6.0f));
         level = worstOf(level, bandHigh(param_Titresim, 2.2f, 2.7f));
         level = worstOf(level, bandHigh(param_EGT, 480.0f, 550.0f));
         return level;
     }
 
-    SpoolProfile GetSpoolProfile() const override {
+    SpoolProfile GetSpoolProfile() const override {    // PD170 için atalet süreleri (kompresyon freni var, devir hızlı düşer).
         return SpoolProfile{
-            /*devir1Rise*/       3.0,  /*devir1Fall*/        5.0,
-            /*devir2Rise*/       90.0, /*devir2Fall*/        200.0,
-            /*basincRise*/       1.0,  /*basincFall*/        1.0,
-            /*egtRise*/          5.0,  /*egtFall*/           15.0,
-            /*yakitRise*/        1.0,  /*yakitFall*/         0.5,
-            /*yagBasinciRise*/   3.0,  /*yagBasinciFall*/    5.0,
-            /*yagSicakligiRise*/ 80.0, /*yagSicakligiFall*/  220.0,
-            /*titresimRise*/     3.0,  /*titresimFall*/      5.0
+            /*devir1Rise*/       3.0,  /*devir1Fall*/        5.0,   // Krank RPM: atalet düşük, hızlı tepki.
+            /*devir2Rise*/       90.0, /*devir2Fall*/        200.0, // Su sıcaklığı: termal kütle, yavaş değişir.
+            /*basincRise*/       1.0,  /*basincFall*/        1.0,   // Kelebek tepkisi anlık.
+            /*egtRise*/          5.0,  /*egtFall*/           15.0,  // Egzoz gazı, hızlı düşer.
+            /*yakitRise*/        1.0,  /*yakitFall*/         0.5,   // Enjeksiyon pompası, neredeyse anlık.
+            /*yagBasinciRise*/   3.0,  /*yagBasinciFall*/    5.0,   // Direkt RPM'e bağlı, hızlı düşer.
+            /*yagSicakligiRise*/ 80.0, /*yagSicakligiFall*/  220.0, // Büyük yağ hacmi, yavaş.
+            /*titresimRise*/     3.0,  /*titresimFall*/      5.0    // Piston ateşleme titreşimi, RPM'e bağlı.
         };
     }
 
-    ParamCeilings GetParamCeilings() const override {
+    ParamCeilings GetParamCeilings() const override {    // Maksimum güçteki tavan değerleri (yıpranma payı dahil).
         const float w = WearFactor();
         return ParamCeilings{
             /*devir1*/ 2800.0, /*devir2*/ 105.0,
@@ -244,7 +245,7 @@ public:
         };
     }
 
-    WearDeviations GetWearDeviations(float power) const override {
+    WearDeviations GetWearDeviations(float power) const override {    // Anlık güce göre yıpranma sapmalarının yüzdelik hesaplaması.
         if (power < 0.0f) power = 0.0f;
         if (power > 1.0f) power = 1.0f;
         const double w = WearFactor() * WearScale(power);

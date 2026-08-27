@@ -101,6 +101,9 @@ private:
     void resetSimulationStateFor(Engine *newEngine);
 
     Engine *currentEngine = nullptr;    // Farklı motorlar runtime da bağlanır
+    // Filo listesinden bir motor seçildiğinde HANGİ sınıfı (TF10000/PD170)
+    // yaratacağımızı hatırlar - selectEngine()'de ayarlanır.
+    QString m_engineFamily = QStringLiteral("TF10000");
     QTimer *m_simTimer = nullptr; // Simülasyonun kalp atışını sağlayan zamanlayıcı.
 
     bool m_running = false;       // Motor çalışıyor mu?

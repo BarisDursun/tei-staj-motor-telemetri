@@ -78,6 +78,7 @@ EngineModel::~EngineModel() {
 void EngineModel::selectEngine(const QString &engineName) {
     delete currentEngine;
     currentEngine = nullptr;
+    m_engineFamily = engineName; // Filo seçiminde hangi sınıfı yaratacağımızı burada hatırlarız.
 
     if (engineName == "TF10000") currentEngine = new TF10000();
     else if (engineName == "PD170") currentEngine = new PD170();
@@ -109,7 +110,10 @@ void EngineModel::selectFleetEngine(int fleetId) {
     if (!found) return;
 
     delete currentEngine;
-    currentEngine = new TF10000(ageYears); // Yaş verisiyle yıpranmış motor simülasyonu başlar.(şu anlık sadece turbofanda)
+    // m_engineFamily hangi motor tipinin filosundan seçim yaptığımızı soyler -
+    // PD170 icin secilmemis/bilinmiyorsa guvenli varsayilan olarak TF10000.
+    if (m_engineFamily == "PD170") currentEngine = new PD170(ageYears);
+    else currentEngine = new TF10000(ageYears); // Yaş verisiyle yıpranmış motor simülasyonu başlar.
     resetSimulationStateFor(currentEngine);  //en son reset
 }
 
