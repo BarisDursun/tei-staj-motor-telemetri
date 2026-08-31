@@ -1,158 +1,222 @@
 #include <QtTest>
 #include "enginemodel.h"
 
-// Kategoriler: A) baslangic durumu  B) esik/sinir deger matrisi
-// C) sinyal disiplini (NOTIFY)      D) resetAlarm davranisi
-// E) uc durum / dayaniklilik        F) vibration
+// EngineModel (gercek API: p_Devir1, alarmLevel, selectEngine, selectFleetEngine...)
+// icin QtTest tabanli entegrasyon testleri. Eski test_enginemodel.cpp Kisi 1'in
+// gercek implementasyonundan once yazilmis bir placeholder API'yi (temperature,
+// alarmState, setTemperatureForTest...) test ediyordu, artik derlenmiyordu -
+// docs/gereksinimler.md onayindan sonra bu dosya bastan yazildi.
+//
+// Kategoriler: A) motor secimi/filo  B) simulasyon/spool  C) alarm start-inhibit
+// D) bakim teshisi (m_tested)        E) wearNotes         F) girdi saglamligi
+
+namespace {
+// simulationTick() private slot - Qt moc string-tabanli invokeMethod'da C++ erisim
+// denetimini gormez, bu yuzden production kodunda test-only bir hook eklemeye
+// gerek kalmadan dogrudan cagirabiliyoruz.
+void tick(EngineModel &model, int times = 1) {
+    for (int i = 0; i < times; ++i)
+        QMetaObject::invokeMethod(&model, "simulationTick");
+}
+}
+
 class TestEngineModel : public QObject {
     Q_OBJECT
 
 private slots:
 
-    // ---------- A. Baslangic durumu ----------
+    // ---------- A. Motor secimi ve filo (FR-01..05, FR-25) ----------
 
-    void freshModelStartsBelowThreshold() {
+    // FR-04: selectFleetEngine'in m_engineFamily'ye gore dogru alt sinifi (PD170) orneklendigini dogrular.
+    void selectFleetEngine_respectsEngineFamily() {
+        // Regresyon testi: m_engineFamily eklenmeden once selectFleetEngine
+        // her zaman TF10000 yaratiyordu - PD170 filodan hic secilemiyordu.
         EngineModel model;
-        QVERIFY2(!model.alarmState(),
-                 "Varsayilan sicaklik (20C) esigin (90C) altinda, alarm baslangicta kapali olmali");
+        model.selectEngine("PD170");
+        model.selectFleetEngine(1); // id=1, age=0
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 60); // guc + atalet oturmasi icin yeterli (PD170 devir1Rise=3s=15 tick)
+
+        // PD170 devir1 RPM'dir (1000-2800), TF10000 devir1 en fazla 100 (%) olur -
+        // bu yuzden >500 gorulmesi PD170'in gercekten yaratildigini kanitlar.
+        QVERIFY2(model.devir1() > 500.0, "PD170 filo secimi TF10000 yaratiyor gibi gorunuyor");
     }
 
-    // ---------- B. Esik / sinir deger matrisi ----------
+    // FR-25: taninmayan motor adinin sessizce reddedilip onceki motor durumunun bozulmadigini dogrular.
+    void selectEngine_invalidName_preservesPreviousState() {
+        EngineModel model;
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(1);
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 40); // m_tested tetiklenene kadar (yagBasinciRise=5s=25 tick)
+        QVERIFY(model.maintenanceStatusText() != QStringLiteral("HENÜZ TEST EDİLMEDİ"));
 
-    void alarmThreshold_data() {
-        QTest::addColumn<double>("temperature");
-        QTest::addColumn<bool>("expectedAlarm");
-
-        QTest::newRow("negatif sicaklik")      << -40.0   << false;
-        QTest::newRow("donma noktasi")         << 0.0     << false;
-        QTest::newRow("soguk")                 << 20.0    << false;
-        QTest::newRow("ilik")                  << 70.0    << false;
-        QTest::newRow("esigin hemen alti")     << 89.9    << false;
-        QTest::newRow("esigin cok hemen alti") << 89.999  << false;
-        QTest::newRow("tam esikte")            << 90.0    << false;  // ">" kullaniliyor, ">=" degil
-        QTest::newRow("esigin cok hemen ustu") << 90.001  << true;
-        QTest::newRow("esigin hemen ustu")     << 90.1    << true;
-        QTest::newRow("sicak")                 << 105.0   << true;
-        QTest::newRow("cok sicak")             << 120.0   << true;
-        QTest::newRow("asiri deger")           << 1000.0  << true;
+        model.selectEngine("BOGUS_ENGINE"); // gecersiz isim
+        // Eger reddedilmeseydi resetSimulationStateFor() m_tested'i false'a dusurup
+        // metni yeniden "HENUZ TEST EDILMEDI"ye cevirirdi.
+        QCOMPARE(model.maintenanceStatusText() != QStringLiteral("HENÜZ TEST EDİLMEDİ"), true);
     }
 
-    void alarmThreshold() {
-        QFETCH(double, temperature);
-        QFETCH(bool, expectedAlarm);
-
+    // FR-25: filoda olmayan fleetId'nin sessizce reddedilip onceki motor durumunun bozulmadigini dogrular.
+    void selectFleetEngine_invalidId_preservesPreviousState() {
         EngineModel model;
-        model.setTemperatureForTest(temperature);
-        QCOMPARE(model.alarmState(), expectedAlarm);
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(1);
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 40);
+        QVERIFY(model.maintenanceStatusText() != QStringLiteral("HENÜZ TEST EDİLMEDİ"));
+
+        model.selectFleetEngine(9999); // filoda olmayan id
+        QVERIFY(model.maintenanceStatusText() != QStringLiteral("HENÜZ TEST EDİLMEDİ"));
     }
 
-    // ---------- C. Sinyal disiplini (NOTIFY) ----------
+    // ---------- B. Simulasyon / spool (FR-07, FR-10, FR-11) ----------
 
-    void temperatureChangedFiresOnSet() {
+    // FR-10: motor durunca parametrelerin aniden sifira degil, fall suresine gore kademeli indigini dogrular.
+    void stopEngine_decaysGraduallyNotInstantly() {
         EngineModel model;
-        QSignalSpy spy(&model, &EngineModel::temperatureChanged);
-        model.setTemperatureForTest(30.0);
-        QCOMPARE(spy.count(), 1);
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(1);
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 80); // tam guce oturt
+
+        const double runningDevir1 = model.devir1();
+        QVERIFY(runningDevir1 > 50.0);
+
+        model.stopEngine();
+        tick(model, 1); // sadece BIR tick sonra
+        QVERIFY2(model.devir1() > 0.0, "Motor durunca devir1 aninda sifira dusmemeli (kademeli inis)");
+        QVERIFY(model.devir1() < runningDevir1);
     }
 
-    void temperatureChangedFiresEvenIfValueUnchanged() {
-        // Acik soru: mevcut implementasyon deger degismese bile kosulsuz
-        // emit ediyor. Bu test mevcut davranisi belgeliyor - QML tarafinda
-        // gereksiz binding yeniden hesaplamasina yol acabilir, Kisi 1 ile
-        // konusulmali (genelde "if (value == m_x) return;" ile onlenir).
+    // FR-11: motor degisiminde onceki motorun test/yiprama durumunun yeni motora sizmadigini dogrular.
+    void switchingEngine_resetsMaintenanceState() {
         EngineModel model;
-        model.setTemperatureForTest(50.0);
-        QSignalSpy spy(&model, &EngineModel::temperatureChanged);
-        model.setTemperatureForTest(50.0);
-        QCOMPARE(spy.count(), 1);
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(1);
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 40);
+        QVERIFY(model.maintenanceStatusText() != QStringLiteral("HENÜZ TEST EDİLMEDİ"));
+
+        model.selectEngine("PD170"); // gecerli bir motor degisimi
+        QCOMPARE(model.maintenanceStatusText(), QStringLiteral("HENÜZ TEST EDİLMEDİ"));
+        QVERIFY(model.wearNotes().isEmpty());
     }
 
-    void alarmStateChangedFiresOnlyOnTransition() {
+    // ---------- C. Alarm start-inhibit (FR-13) ----------
+
+    // FR-13: yag basinci ataleti %97'ye ulasmadan alarmin zorunlu olarak Normal kaldigini dogrular (sahte alarm engeli).
+    void alarmStaysNormalBeforeOilPressureSettles() {
         EngineModel model;
-        QSignalSpy spy(&model, &EngineModel::alarmStateChanged);
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(1);
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 1); // sadece bir tick - factorYagBasinci hala ~0.04
 
-        model.setTemperatureForTest(95.0);   // false -> true : 1 emit
-        model.setTemperatureForTest(100.0);  // true  -> true : emit YOK
-        model.setTemperatureForTest(110.0);  // true  -> true : emit YOK
-
-        QCOMPARE(spy.count(), 1);
-        QVERIFY(model.alarmState());
+        QCOMPARE(model.alarmLevel(), EngineModel::AlarmLevel::Normal);
     }
 
-    void alarmStateChangedFiresOnReturnToNormal() {
+    // ---------- D. Bakim teshisi / m_tested (FR-15, FR-16, FR-17) ----------
+
+    // FR-15: motor hic calistirilmadan bakim durumunun gosterilmedigini dogrular ("HENUZ TEST EDILMEDI").
+    void freshFleetSelection_showsNotTestedYet() {
         EngineModel model;
-        model.setTemperatureForTest(95.0);
-        QSignalSpy spy(&model, &EngineModel::alarmStateChanged);
-        model.setTemperatureForTest(50.0);   // true -> false
-        QCOMPARE(spy.count(), 1);
-        QVERIFY(!model.alarmState());
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(5); // yasli bir motor (age=5) olsa bile
+        QCOMPARE(model.maintenanceStatusText(), QStringLiteral("HENÜZ TEST EDİLMEDİ"));
+        QVERIFY(model.wearNotes().isEmpty());
     }
 
-    // ---------- D. resetAlarm davranisi ----------
-
-    void resetAlarmClearsActiveAlarm() {
-        EngineModel model;
-        model.setTemperatureForTest(95.0);
-        QVERIFY(model.alarmState());
-        model.resetAlarm();
-        QVERIFY(!model.alarmState());
+    // FR-17: GetMaintenanceStatus'un uc seviyesinin (fleetId -> yas uzerinden) EngineModel'e dogru yansidigini dogrular.
+    void maintenanceStatus_data() {
+        // bkz. docs/test-parametre-referans-degerleri.md (fleetId -> yas eslesmesi)
+        QTest::addColumn<int>("fleetId");
+        QTest::addColumn<QString>("expectedText");
+        QTest::newRow("age=0 -> SAGLIKLI")      << 1 << QStringLiteral("SAĞLIKLI");
+        QTest::newRow("age=5 -> IZLENMELI")     << 5 << QStringLiteral("İZLENMELİ");
+        QTest::newRow("age=10 -> BAKIM GEREKLI") << 7 << QStringLiteral("BAKIM GEREKLİ");
     }
 
-    void resetAlarmEmitsSignalWhenClearingActiveAlarm() {
+    void maintenanceStatus() {
+        QFETCH(int, fleetId);
+        QFETCH(QString, expectedText);
+
         EngineModel model;
-        model.setTemperatureForTest(95.0);
-        QSignalSpy spy(&model, &EngineModel::alarmStateChanged);
-        model.resetAlarm();
-        QCOMPARE(spy.count(), 1);
+        model.selectEngine("PD170"); // yagBasinciRise=3s -> hizli oturur, test hizli kalir
+        model.selectFleetEngine(fleetId);
+        model.startEngine();
+        model.setPower(0.0); // rolantide bile test tamamlanmali
+        tick(model, 25);     // 0.97/(0.2/3) ~ 15 tick yeter, pay birakildi
+
+        QCOMPARE(model.maintenanceStatusText(), expectedText);
     }
 
-    void resetAlarmWhileStillHot_reTriggersOnNextReading() {
-        // Tasarim sorusu: sicaklik hala esigin ustundeyken resetAlarm()
-        // cagrilirsa, mevcut implementasyon bir sonraki okumada alarmi
-        // hemen tekrar tetikliyor (m_alarmState false'a duser, sonraki
-        // adimda newAlarm=true tekrar farkli bulunur). Bu istenen davranis
-        // mi, yoksa sicaklik gercekten esigin altina dusene kadar alarmin
-        // sessiz kalmasi mi gerekiyor - Kisi 1 ile netlestirilmeli.
+    // FR-16, NFR-06: m_tested true olunca maintenanceStatusChanged sinyalinin tetiklendigini dogrular.
+    void maintenanceStatusChanged_firesExactlyOnceWhenTestedFlips() {
         EngineModel model;
-        model.setTemperatureForTest(95.0);
-        model.resetAlarm();
-        QVERIFY(!model.alarmState());
+        model.selectEngine("PD170");
+        model.selectFleetEngine(1);
+        model.startEngine();
+        model.setPower(0.0);
+        tick(model, 10); // henuz %97'ye ulasmadi (10*0.0667=0.667)
 
-        model.setTemperatureForTest(95.0);  // ayni yuksek deger, "bir sonraki okuma"
-        QVERIFY2(model.alarmState(),
-                 "Mevcut implementasyonda reset sonrasi sicaklik hala esigin "
-                 "ustundeyse alarm bir sonraki okumada tekrar tetikleniyor");
+        QSignalSpy spy(&model, &EngineModel::maintenanceStatusChanged);
+        tick(model, 15); // simdi esigi gecer, m_tested tam bu araliktaki bir tick'te true olur
+        QVERIFY2(spy.count() >= 1, "m_tested true olunca maintenanceStatusChanged en az bir kez tetiklenmeli");
     }
 
-    // ---------- E. Uc durum / dayaniklilik ----------
+    // ---------- E. wearNotes: %10 filtre + buyukten kucuge siralama (FR-18, FR-19) ----------
 
-    void extremeNegativeTemperatureDoesNotCrash() {
+    // FR-18, FR-19: wearNotes'un %10 esigini filtreledigini ve buyukten kucuge siraladigini gercek sayilarla dogrular.
+    void wearNotes_filtersBelowTenPercent_andSortsByMagnitude() {
+        // docs/test-parametre-referans-degerleri.md'deki hesapla birebir orten senaryo:
+        // PD170, age=10 (fleetId=7), tam guc -> w_eff~0.7135
+        //   Titresim  : +57%  (WEAR_TITRESIM=0.80)      -> listede, ilk sirada
+        //   YagBasinci: -14%  (WEAR_YAG_BASINCI=-0.20)  -> listede, ikinci sirada
+        //   EGT ~7%, YagSicakligi ~9%, Yakit ~6%        -> %10 esiginin altinda, listede degil
         EngineModel model;
-        model.setTemperatureForTest(-1.0e9);
-        QVERIFY(!model.alarmState());
-        QCOMPARE(model.temperature(), -1.0e9);
+        model.selectEngine("PD170");
+        model.selectFleetEngine(7); // age=10
+        model.startEngine();
+        model.setPower(100.0);
+        tick(model, 40); // guc (100/4=25 tick) + yagBasinci ataleti (~15 tick) icin yeterli
+
+        const QVariantList notes = model.wearNotes();
+        QCOMPARE(notes.size(), 2);
+        QCOMPARE(notes.at(0).toString(), QStringLiteral("Titreşim: referansa göre +57%"));
+        QCOMPARE(notes.at(1).toString(), QStringLiteral("Yağ Basıncı: referansa göre -14%"));
     }
 
-    void extremePositiveTemperatureDoesNotCrash() {
-        EngineModel model;
-        model.setTemperatureForTest(1.0e9);
-        QVERIFY(model.alarmState());
-        QCOMPARE(model.temperature(), 1.0e9);
-    }
+    // ---------- F. Girdi saglamligi (FR-24, NFR-04) ----------
 
-    // ---------- F. Vibration ----------
-
-    void freshModelHasZeroVibration() {
+    // FR-24, NFR-04: setPower()'a asiri buyuk bir hedef verilince clamp'in devreye girip
+    // gostergenin makul degere donuste hizla tepki verdigini dogrular (regresyon testi:
+    // clamp eklenmeden once m_actualPower sinirsizca surukleniyor, deger uzun sure eskide takili kaliyordu).
+    void setPower_clampsExtremeTarget_recoversPromptly() {
         EngineModel model;
-        QCOMPARE(model.vibration(), 0.0);
-    }
+        model.selectEngine("TF10000");
+        model.selectFleetEngine(1);
+        model.startEngine();
 
-    void vibrationChangedFiresOnSet() {
-        EngineModel model;
-        QSignalSpy spy(&model, &EngineModel::vibrationChanged);
-        model.setVibrationForTest(2.5);
-        QCOMPARE(spy.count(), 1);
-        QCOMPARE(model.vibration(), 2.5);
+        model.setPower(50.0);
+        tick(model, 60); // ~%50'de otur (atalet dahil)
+
+        model.setPower(5000.0); // asiri buyuk hedef
+        tick(model, 400);       // clamp olmasaydi actualPower burada binlere cikardi
+        const double peakDevir1 = model.devir1();
+        QVERIFY2(peakDevir1 <= 100.5, "clamp olmadan bile fiziksel tavan asilmamali (Engine_Start kendi ici clamp'i)");
+
+        model.setPower(50.0); // guc tekrar makul degere cekiliyor
+        tick(model, 5);       // sadece birkac tick - clamp'siz durumda hala tavana yakin kalirdi
+
+        QVERIFY2(model.devir1() < peakDevir1 - 5.0,
+                 "setPower(5000) sonrasi 50'ye donulunce gosterge birkac tick icinde dusmeye baslamali");
     }
 };
 

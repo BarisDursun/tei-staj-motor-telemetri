@@ -283,6 +283,29 @@ ApplicationWindow {
                             }
                         }
 
+                        // STM32'nin DAHILI sicaklik sensorunden gelen deger - ORTAM havasi degil
+                        // (chip'in kendi ic sicakligi), EGT'ye motora ozgu oranlanarak yansiyan bir
+                        // girdi (bkz. engine_core.h EGT_SENSOR_GAIN). Kart takili degilse nokta gri
+                        // kalir, varsayilan 25°C kullanilir, uygulama etkilenmez (bkz. embeddedtempsensor.cpp).
+                        Rectangle {
+                            Layout.preferredWidth: 150
+                            Layout.fillHeight: true
+                            color: bgPanelAlt
+                            RowLayout {
+                                anchors.centerIn: parent
+                                spacing: 6
+                                Rectangle {
+                                    width: 8; height: 8; radius: 4
+                                    color: engineModel.sensorBagli ? greenC : dimC
+                                }
+                                Text {
+                                    text: "EGT SENSÖRÜ: " + engineModel.p_SensorSicakligi.toFixed(1) + "°C"
+                                    color: engineModel.sensorBagli ? whiteC : dimC
+                                    font.pixelSize: 11
+                                }
+                            }
+                        }
+
                         // Motorun genel durumu - EngineModel::alarmLevel'dan tek kaynaktan okunur.
                         Rectangle {
                             Layout.preferredWidth: 110

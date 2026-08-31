@@ -1,201 +1,63 @@
-# EngineModel — Test Case Dokümantasyonu
+# Test Paketi — Dokümantasyon
 
 | | |
 |---|---|
-| **Modül** | `EngineModel` (`enginemodel.h` / `enginemodel.cpp`) |
-| **Test dosyası** | `tests/test_enginemodel.cpp` |
-| **Framework** | QtTest (Qt 5.15.2) |
+| **Kapsam** | `engine_core.h` (fizik/domain modeli) ve `EngineModel` (Qt köprüsü) |
 | **Hazırlayan** | Kişi 2 — Test |
-| **Son çalıştırma** | 26/26 PASS, 0 FAIL, 0 SKIP |
-| **Ortam** | Qt 5.15.2, MinGW 8.1.0 64-bit, Windows 11 |
+| **İlgili dokümanlar** | [../docs/gereksinimler.md](../docs/gereksinimler.md), [../docs/test-parametre-referans-degerleri.md](../docs/test-parametre-referans-degerleri.md) |
+| **Son çalıştırma** | `test_engine_core`: 80/80 CHECK PASS · `test_enginemodel`: 15/15 QtTest PASS (0 FAIL) |
 
-## 1. Kapsam ve Amaç
+> Bu dosya, `gereksinimler.md` onayından sonra baştan yazıldı. Önceki sürüm, Kişi 1'in gerçek `EngineModel` implementasyonundan önceki bir **placeholder API**'yi (`temperature()`, `alarmState()`, `setTemperatureForTest()`...) test ediyordu ve artık şu anki kodla derlenmiyordu — bkz. eski `docs/test-parametre-referans-degerleri.md` §7.
 
-Bu doküman `EngineModel` çekirdek sınıfının şu davranışlarını doğrulayan test senaryolarını tanımlar:
-- Alarm eşik mantığının (`temperature > 90°C`) doğruluğu ve sınır değerlerdeki tutarlılığı
-- `Q_PROPERTY` / `NOTIFY` sinyal disiplini (sinyal doğru zamanda, doğru sayıda tetikleniyor mu)
-- `resetAlarm()` komutunun durum yönetimi
-- Aşırı/geçersiz girdilerde çökme olup olmadığı
-- `vibration` property'sinin temel doğruluğu
+## 1. İki Ayrı Test Dosyası, İki Farklı Amaç
 
-Test edilen `EngineModel`, Kişi 1'in gerçek implementasyonu teslim edilene kadar kullanılan **placeholder** sürümdür (`enginemodel.h/.cpp` içindeki yorum satırında belirtilmiştir). Property isimleri ve imzaları kilitlendiği için testler gerçek implementasyon geldiğinde değişiklik gerektirmeden çalışmaya devam edecektir.
-
-## 2. Özet Tablo
-
-| ID | Test Adı | Kategori | Durum |
-|---|---|---|---|
-| TC-01 | freshModelStartsBelowThreshold | A. Başlangıç durumu | ✅ PASS |
-| TC-02 | alarmThreshold (12 senaryo, veri-odaklı) | B. Eşik/sınır matrisi | ✅ PASS |
-| TC-03 | temperatureChangedFiresOnSet | C. Sinyal disiplini | ✅ PASS |
-| TC-04 | temperatureChangedFiresEvenIfValueUnchanged | C. Sinyal disiplini | ✅ PASS ⚠️ |
-| TC-05 | alarmStateChangedFiresOnlyOnTransition | C. Sinyal disiplini | ✅ PASS |
-| TC-06 | alarmStateChangedFiresOnReturnToNormal | C. Sinyal disiplini | ✅ PASS |
-| TC-07 | resetAlarmClearsActiveAlarm | D. resetAlarm davranışı | ✅ PASS |
-| TC-08 | resetAlarmEmitsSignalWhenClearingActiveAlarm | D. resetAlarm davranışı | ✅ PASS |
-| TC-09 | resetAlarmWhileStillHot_reTriggersOnNextReading | D. resetAlarm davranışı | ✅ PASS ⚠️ |
-| TC-10 | extremeNegativeTemperatureDoesNotCrash | E. Uç durum/dayanıklılık | ✅ PASS ⚠️ |
-| TC-11 | extremePositiveTemperatureDoesNotCrash | E. Uç durum/dayanıklılık | ✅ PASS |
-| TC-12 | freshModelHasZeroVibration | F. Vibration | ✅ PASS |
-| TC-13 | vibrationChangedFiresOnSet | F. Vibration | ✅ PASS |
-
-⚠️ işaretli testler PASS oluyor ama **açık bir tasarım sorusunu belgeliyor** — bkz. [Bölüm 4](#4-testler-sırasında-bulunan-açık-tasarım-soruları).
-
----
-
-## 3. Detaylı Test Senaryoları
-
-### Kategori A — Başlangıç Durumu
-
-#### TC-01 — freshModelStartsBelowThreshold
-- **Amaç:** Yeni oluşturulan bir `EngineModel` nesnesinin varsayılan sıcaklığının (20°C) eşiğin (90°C) altında olduğunu, dolayısıyla alarmın başlangıçta kapalı geldiğini doğrulamak.
-- **Ön koşul:** Yok — kurucu (constructor) dışında hiçbir işlem yapılmamış nesne.
-- **Adımlar:** 1) `EngineModel model;` oluştur.
-- **Beklenen sonuç:** `model.alarmState() == false`
-- **Gerçek sonuç:** PASS
-
----
-
-### Kategori B — Eşik / Sınır Değer Matrisi
-
-#### TC-02 — alarmThreshold (veri-odaklı, 12 senaryo)
-- **Amaç:** Alarm eşik mantığının (`temperature > 90.0`) tüm kritik sınır bölgelerinde doğru çalıştığını tek bir test fonksiyonuyla kapsamlı biçimde doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** Her senaryo için: 1) yeni `EngineModel` oluştur, 2) `setTemperatureForTest(sıcaklık)` çağır, 3) `alarmState()`'i beklenen değerle karşılaştır.
-- **Test verisi:**
-
-| Senaryo | Sıcaklık (°C) | Beklenen Alarm |
+| Dosya | Framework | Neden ayrı |
 |---|---|---|
-| negatif sıcaklık | -40.0 | false |
-| donma noktası | 0.0 | false |
-| soğuk | 20.0 | false |
-| ılık | 70.0 | false |
-| eşiğin hemen altı | 89.9 | false |
-| eşiğin çok hemen altı | 89.999 | false |
-| **tam eşikte** | 90.0 | **false** |
-| eşiğin çok hemen üstü | 90.001 | true |
-| eşiğin hemen üstü | 90.1 | true |
-| sıcak | 105.0 | true |
-| çok sıcak | 120.0 | true |
-| aşırı değer | 1000.0 | true |
+| `test_engine_core.cpp` | Yok — elle yazılmış `CHECK`/`CHECK_NEAR` makroları, sadece `<cstdio>`/`<cmath>` | `engine_core.h`'nin gerçekten Qt'den bağımsız olduğunu **kanıtlamak** için (NFR-05). Hiçbir Qt kütüphanesine bağlanmıyor. |
+| `test_enginemodel.cpp` | QtTest (`Qt5::Test`) | `EngineModel`, Qt sinyal/slot sistemine bağlı bir köprü katmanı — `QSignalSpy` gibi Qt'ye özgü araçlar gerekiyor (NFR-06). |
 
-- **Beklenen sonuç:** Her satır için `alarmState()` tablodaki değerle eşleşir.
-- **Gerçek sonuç:** PASS (12/12 satır)
-- **Not:** "tam eşikte" satırı özellikle önemli — kod `>` operatörü kullanıyor (`>=` değil), yani tam 90.0'da alarm **tetiklenmemeli**. Bu test, biri yanlışlıkla `>=` yaparsa kırmızı çıkacak şekilde tasarlandı.
+## 2. `test_engine_core.cpp` — Kategoriler
 
----
+| Kategori | Kapsadığı FR | Ne test ediyor |
+|---|---|---|
+| A. WearFactor / yaş sınırları | FR-09, NFR-04 | Taze motor → 0 yıpranma; **negatif yaş 0'a sabitleniyor** (bkz. `gereksinimler.md` NFR-04 kararı); çok büyük yaş 1'e yaklaşır ama geçmez. |
+| B. GetMaintenanceStatus üç seviye | FR-17 | `w=0.45` ve `w=0.70` sınırlarının hemen altı/üstünde doğru seviye (Healthy/Watch/MaintenanceRequired). |
+| C. Engine_Start güç clamp | FR-24 | Negatif güç → rölanti gibi, aşırı büyük güç → tam güç gibi davranıyor. |
+| D. ParamCeilings tutarlılığı | — | Taze motorda (age=0) %100 güçteki fiziksel değer, `GetParamCeilings()` ile birebir eşleşiyor. |
+| E / E2 | FR-12, FR-14a | TF10000 `EvaluateAlarm()` sınır matrisi — her parametre için `warnAt-ε / warnAt / critAt-ε / critAt` (kod `>=` kullanıyor, tam eşikte alarm zaten tetiklenmeli). YağBasıncı'nın iki taraflı `bandRange` mantığı ayrıca test edildi. **Yeni eklenen YağSıcaklığı alarmı (FR-14a) dahil.** |
+| F / F2 | FR-12, FR-14b | Aynısı PD170 için. **Yeni eklenen turbo Basınç (overboost) alarmı (FR-14b) dahil.** |
+| G. worstOf | FR-14 | Aynı anda birden fazla parametre eşik aşarsa gösterilen seviye en kötüsü oluyor. |
+| H. WearScale | FR-09 | Aynı yaştaki motorda, yıpranma etkisi rölantide düşük, tam güçte daha yüksek çıkıyor. |
+| I. EGT sensör kazancı | FR-09a | STM32 dahili sıcaklık sensöründen gelen +10°C sapmanın, `EGT_SENSOR_GAIN` ile her motorun kendi EGT tabanına eklenip eklenmediği; **daha önemlisi**, aynı sapmanın TF10000 ve PD170'de EGT aralığının (span) birebir **aynı yüzdesini** kaydırdığının matematiksel doğrulaması. |
 
-### Kategori C — Sinyal Disiplini (`NOTIFY`)
+## 3. `test_enginemodel.cpp` — Kategoriler
 
-#### TC-03 — temperatureChangedFiresOnSet
-- **Amaç:** `setTemperatureForTest()` çağrıldığında `temperatureChanged` sinyalinin gerçekten yayınlandığını doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) `QSignalSpy` ile `temperatureChanged` sinyalini dinlemeye başla, 2) `setTemperatureForTest(30.0)` çağır.
-- **Beklenen sonuç:** `spy.count() == 1`
-- **Gerçek sonuç:** PASS
+| Kategori | Kapsadığı FR | Ne test ediyor |
+|---|---|---|
+| A. Motor seçimi / filo | FR-04, FR-25 | `selectFleetEngine`'in `m_engineFamily`'ye göre doğru sınıfı yarattığı (PD170 filo regresyon testi); geçersiz motor adı/`fleetId`'nin önceki motoru **bozmadan** reddedildiği. |
+| B. Simülasyon / spool | FR-10, FR-11 | Motor durunca parametrelerin kademeli düştüğü (anlık sıfırlanmadığı); motor değişiminde önceki test/yıpranma durumunun sızmadığı. |
+| C. Alarm start-inhibit | FR-13 | Spool-up'ın hemen başında (yağ basıncı ataleti oturmadan) alarmın zorunlu olarak Normal kaldığı. |
+| D. Bakım teşhisi | FR-15, FR-16, FR-17 | Test edilmeden "HENÜZ TEST EDİLMEDİ" gösterildiği; farklı yaşlardaki filo motorlarının (0/5/10 yıl) doğru SAĞLIKLI/İZLENMELİ/BAKIM GEREKLİ metnini ürettiği; `m_tested` geçişinde `maintenanceStatusChanged`'in tetiklendiği. |
+| E. wearNotes | FR-18, FR-19 | `docs/test-parametre-referans-degerleri.md`'deki hesapla birebir örtüşen bir senaryo (PD170, 10 yaş, tam güç): sadece %10'u aşan iki sapmanın (Titreşim +57%, Yağ Basıncı -14%), büyükten küçüğe sıralı biçimde listelendiği; %10 altındakilerin (EGT, Yağ Sıcaklığı, Yakıt) filtrelendiği. |
+| F. Girdi sağlamlığı | FR-24, NFR-04 | `setPower()`'a aşırı büyük bir hedef (5000) verilip sonra makul bir değere (50) dönüldüğünde, göstergenin birkaç tick içinde tepki verdiği — clamp eklenmeden önceki "eski değerde uzun süre takılı kalma" davranışının artık oluşmadığı. |
 
-#### TC-04 — temperatureChangedFiresEvenIfValueUnchanged ⚠️
-- **Amaç:** Sıcaklık zaten set edilmiş bir değere **tekrar aynı değerle** set edildiğinde sinyalin yine de tetiklenip tetiklenmediğini belgelemek.
-- **Ön koşul:** Sıcaklık önce 50.0'a set edilmiş.
-- **Adımlar:** 1) `setTemperatureForTest(50.0)`, 2) spy'ı başlat, 3) `setTemperatureForTest(50.0)` — **aynı değer**.
-- **Beklenen sonuç (mevcut davranış):** `spy.count() == 1` — yani değer değişmese de sinyal atılıyor.
-- **Gerçek sonuç:** PASS
-- **Not:** ⚠️ Bu "doğru" davranış değil, **mevcut** davranış. Değer değişmediği halde sinyal atmak QML tarafında gereksiz binding yeniden hesaplamasına yol açar. Bkz. Bölüm 4.
+## 4. Kapsam Dışı / Bilinen Test Boşlukları
 
-#### TC-05 — alarmStateChangedFiresOnlyOnTransition
-- **Amaç:** `alarmStateChanged` sinyalinin sadece gerçek bir durum **geçişinde** (false→true veya true→false) tetiklendiğini, alarm zaten aktifken tekrar yüksek sıcaklık set edilirse tekrar tetiklenmediğini doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) spy başlat, 2) `setTemperatureForTest(95.0)` (false→true), 3) `setTemperatureForTest(100.0)` (true→true), 4) `setTemperatureForTest(110.0)` (true→true).
-- **Beklenen sonuç:** `spy.count() == 1` (sadece ilk geçişte), `alarmState() == true`.
-- **Gerçek sonuç:** PASS
+Şeffaflık için: her şey otomatik testli değil.
 
-#### TC-06 — alarmStateChangedFiresOnReturnToNormal
-- **Amaç:** Alarm aktifken sıcaklık normale döndüğünde sinyalin tekrar tetiklendiğini doğrulamak (true→false geçişi).
-- **Ön koşul:** Sıcaklık 95.0'a set edilmiş, alarm aktif.
-- **Adımlar:** 1) spy başlat, 2) `setTemperatureForTest(50.0)`.
-- **Beklenen sonuç:** `spy.count() == 1`, `alarmState() == false`.
-- **Gerçek sonuç:** PASS
-
----
-
-### Kategori D — `resetAlarm()` Davranışı
-
-#### TC-07 — resetAlarmClearsActiveAlarm
-- **Amaç:** `resetAlarm()` çağrıldığında aktif alarmın gerçekten kapandığını doğrulamak.
-- **Ön koşul:** Sıcaklık 95.0, alarm aktif.
-- **Adımlar:** 1) `resetAlarm()` çağır.
-- **Beklenen sonuç:** `alarmState() == false`
-- **Gerçek sonuç:** PASS
-
-#### TC-08 — resetAlarmEmitsSignalWhenClearingActiveAlarm
-- **Amaç:** `resetAlarm()`'ın alarmı kapatırken `alarmStateChanged` sinyalini de yayınladığını doğrulamak (QML/web tarafının haberdar olması için şart).
-- **Ön koşul:** Sıcaklık 95.0, alarm aktif.
-- **Adımlar:** 1) spy başlat, 2) `resetAlarm()` çağır.
-- **Beklenen sonuç:** `spy.count() == 1`
-- **Gerçek sonuç:** PASS
-
-#### TC-09 — resetAlarmWhileStillHot_reTriggersOnNextReading ⚠️
-- **Amaç:** Sıcaklık hâlâ eşiğin üstündeyken `resetAlarm()` çağrılırsa, bir sonraki okumada alarmın davranışını belgelemek.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) `setTemperatureForTest(95.0)`, 2) `resetAlarm()` → `alarmState() == false` olduğunu doğrula, 3) `setTemperatureForTest(95.0)` — **aynı yüksek değer, "bir sonraki okuma" simülasyonu**.
-- **Beklenen sonuç (mevcut davranış):** `alarmState() == true` — yani alarm hemen geri geliyor.
-- **Gerçek sonuç:** PASS
-- **Not:** ⚠️ Reset, sıcaklığı düşürmüyor — sadece bayrağı temizliyor. Sıcaklık hâlâ yüksekse bir sonraki `simulateStep()`/okumada alarm otomatik geri geliyor. Kullanıcı deneyimi açısından tartışmalı bir davranış, bkz. Bölüm 4.
-
----
-
-### Kategori E — Uç Durum / Dayanıklılık
-
-#### TC-10 — extremeNegativeTemperatureDoesNotCrash ⚠️
-- **Amaç:** Aşırı negatif bir sıcaklık değeri verildiğinde sistemin çökmediğini ve değeri **olduğu gibi** kabul ettiğini doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) `setTemperatureForTest(-1.0e9)`.
-- **Beklenen sonuç:** Çökme yok, `alarmState() == false`, `temperature() == -1.0e9` (sınırlama/clamp yok).
-- **Gerçek sonuç:** PASS
-- **Not:** ⚠️ `simulateStep()` içindeki `qBound(0.0, ..., 120.0)` sınırlaması burada **uygulanmıyor** — test girişi ham olarak kabul ediliyor. Bkz. Bölüm 4.
-
-#### TC-11 — extremePositiveTemperatureDoesNotCrash
-- **Amaç:** Aşırı pozitif bir sıcaklık değerinde de sistemin çökmediğini doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) `setTemperatureForTest(1.0e9)`.
-- **Beklenen sonuç:** Çökme yok, `alarmState() == true`, `temperature() == 1.0e9`.
-- **Gerçek sonuç:** PASS
-
----
-
-### Kategori F — Vibration
-
-#### TC-12 — freshModelHasZeroVibration
-- **Amaç:** Yeni nesnenin varsayılan `vibration` değerinin 0.0 olduğunu doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) `EngineModel model;` oluştur.
-- **Beklenen sonuç:** `vibration() == 0.0`
-- **Gerçek sonuç:** PASS
-
-#### TC-13 — vibrationChangedFiresOnSet
-- **Amaç:** `setVibrationForTest()` hem değeri güncelliyor hem `vibrationChanged` sinyalini tetikliyor mu, doğrulamak.
-- **Ön koşul:** Yok.
-- **Adımlar:** 1) spy başlat, 2) `setVibrationForTest(2.5)`.
-- **Beklenen sonuç:** `spy.count() == 1`, `vibration() == 2.5`.
-- **Gerçek sonuç:** PASS
-- **Not:** `setVibrationForTest()` test edilebilirlik için Kişi 2 tarafından eklendi (orijinal placeholder'da yoktu) — `setTemperatureForTest()` ile aynı kalıp.
-
----
-
-## 4. Testler Sırasında Bulunan Açık Tasarım Soruları
-
-Bu 3 madde "test başarısız" değil — **testler geçiyor çünkü mevcut davranışı doğru şekilde belgeliyorlar**. Ama davranışın kendisi tartışmaya açık, Kişi 1 ile netleştirilmeli:
-
-| # | Bulgu | İlgili Test | Soru |
-|---|---|---|---|
-| 1 | Değer değişmese bile `NOTIFY` sinyali koşulsuz tetikleniyor | TC-04 | `if (value == m_temperature) return;` gibi bir koruma eklenmeli mi? |
-| 2 | `setTemperatureForTest` hiçbir sınırlama (clamp) yapmıyor | TC-10 | Test girişi kasıtlı olarak ham mı kalmalı, yoksa `simulateStep()`'teki `qBound` mantığı burada da mı uygulanmalı? |
-| 3 | `resetAlarm()` sonrası sıcaklık hâlâ yüksekse alarm anında geri geliyor | TC-09 | İstenen davranış bu mu, yoksa sıcaklık gerçekten eşiğin altına düşene kadar alarm sessiz mi kalmalı? |
+- **`EmbeddedTempSensor` (`embeddedtempsensor.cpp`)** hiç unit test edilmiyor — `QSerialPort` üzerinden gerçek donanıma bağlanıyor, bunu izole test etmek bir mock/fake seri port gerektirir (kapsam dışı bırakıldı). Şu an sadece manuel olarak doğrulandı: kart takılı değilken uygulama çökmeden varsayılan 25°C'de kalıyor (bkz. `docs/gereksinimler.md` FR-09a).
+- **FR-20/21/22/23 (QML/UI davranışları)** otomatik test edilmiyor — Qt Quick Test ayrı bir efor gerektirir, şu an için manuel/gözle doğrulama listesinde (`docs/gereksinimler.md` §4 Kabul Kriterleri).
+- **NFR-01/02 (performans), NFR-11 (renk kodlaması)** de aynı şekilde manuel doğrulama kapsamında — otomatik bir performans/görsel regresyon testi yok.
 
 ## 5. Nasıl Çalıştırılır
 
-1. Qt Creator'da `EngineTelemetry` projesini aç.
-2. Sol alt köşedeki hedef seçiciden **`test_enginemodel`**'i seç.
-3. `Ctrl+B` (derle) → `Ctrl+R` (çalıştır).
-4. **Application Output** panelinde sonuçları gör (`PASS`/`FAIL` satırları).
+```bash
+"C:\Qt\Tools\CMake_64\bin\cmake.exe" --build "C:\Users\brsdr\Desktop\EngineTelemetry\build"
+"C:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir "C:\Users\brsdr\Desktop\EngineTelemetry\build" --output-on-failure
+```
 
-Komut satırından: `build/tests/test_enginemodel.exe` (not: bu ortamda CLI çıktısı konsola düşmüyor, Qt Creator üzerinden çalıştırmak güvenilir sonuç için gerekli).
+`ctest` çalışmadan önce Qt/MinGW DLL dizinlerinin `PATH`'te olması gerekiyor (`C:\Qt\5.15.2\mingw81_64\bin`, `C:\Qt\Tools\mingw810_64\bin`) — aksi halde `test_enginemodel` DLL bulunamadığı için `0xc0000135` hatasıyla çöker (framework hatası değil, ortam eksikliği).
+
+**Bilinen ortam kısıtlaması:** `test_enginemodel.exe`'nin QtTest çıktısı bu shell ortamında konsola düşmüyor (eski `TEST_CASES.md`'de de aynı not vardı) — süreç yine de doğru çıkış koduyla (0=hepsi PASS) dönüyor ve `ctest` bunu doğru okuyor. Ayrıntılı PASS/FAIL dökümü görmek gerekirse: `test_enginemodel.exe -o sonuc.txt,txt` ile dosyaya yazdırılabilir, ya da Qt Creator üzerinden çalıştırılabilir.
+
+`test_engine_core.exe` ise sıradan bir konsol programı olduğu için çıktısı doğrudan terminalde görünür.

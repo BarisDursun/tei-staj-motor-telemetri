@@ -38,6 +38,8 @@ public:
     float powerLevel;
     float param_Devir1, param_Devir2, param_Basinc, param_EGT;
     float param_Yakit, param_YagBasinci, param_YagSicakligi, param_Titresim;
+    // param_Titresim: gerçek bir IPS/mils ölçüsü değil, motora özgü dahili göreli şiddet skoru.
+    // Motorlar arası ölçek farklı (TF10000 tavanı ~6, PD170 tavanı ~3), doğrudan karşılaştırılamaz.
     bool alarmState;
     float ageYears = 0.0f; // Motorun yaşı (Yıpranma simülasyonu için)
 
@@ -45,12 +47,15 @@ public:
     virtual ~Engine() {}
 
     // Alt sınıfların (TF10000, PD170) kendine has motor tepkilerini yazacağı saf sanal fonksiyon.
-    virtual void Engine_Start(float power, float lm35Temp) = 0;
+    // sensorTemp: STM32 karttan (Gömülü.cpp.txt) gelen ham sıcaklık - ortam değil,
+    // EGT_SENSOR_GAIN ile motora özgü oranlanarak doğrudan EGT'ye yansıtılır.
+    virtual void Engine_Start(float power, float sensorTemp) = 0;
 
 
     float WearFactor() const {      // Motorun yaşa göre eponantional yıpranma faktörü hesaplar 0-1 arası
         const float tau = 8.0f;
-        return 1.0f - std::exp(-ageYears / tau);
+        const float t = ageYears < 0.0f ? 0.0f : ageYears; // Negatif yaş (savunma amaçlı) fiziksel olmayan sonuç üretmesin diye 0'a sabitlenir.
+        return 1.0f - std::exp(-t / tau);
     }
 
     MaintenanceStatus GetMaintenanceStatus() const {    // Yıpranmaya göre  bakım durumunu belirler enumda
@@ -102,11 +107,17 @@ public:
     static constexpr float WEAR_YAG_SICAKLIGI = 0.15f;
     static constexpr float WEAR_TITRESIM = 1.5f;
 
+    // STM sensorunun 25°C referanstan sapmasi, EGT'ye 1:1 degil bu kazancla yansir -
+    // 470 (bu motorun EGT araligi: 480 rolanti -> 950 tam guc) / 100 = 4.7. Yani
+    // sensor 100 derece sapsa EGT'yi kendi tam araliginca kaydirir (bkz. PD170'deki
+    // farkli kazancla kiyasla - "motora gore oranli" demek budur).
+    static constexpr float EGT_SENSOR_GAIN = 4.7f;
+
     // Yıpranmanın etkisini anlık güce göre ölçekler -Rölantide az, tam güçte çok etki eder-
     static float WearScale(float power) { return 0.3f + 0.7f * power; }
 
-    // TF10000'in fiziksel tepki modeli. Güç ve ortam sıcaklığına göre anlık değerleri hesaplar.
-    void Engine_Start(float power, float lm35Temp) override {
+    // TF10000'in fiziksel tepki modeli. Güç ve STM sensöründen gelen EGT girdisine göre anlık değerleri hesaplar.
+    void Engine_Start(float power, float sensorTemp) override {
         if (power < 0.0f) power = 0.0f;
         if (power > 1.0f) power = 1.0f;
         powerLevel = power;
@@ -114,9 +125,10 @@ public:
 
         param_Devir1 = 35.0f + (power * 65.0f);
         param_Devir2 = 65.0f + (power * 35.0f);
-        param_Basinc = 2.0f  + (power * 18.0f);
-        //LM35-> ortam sıcaksa etikler     W-> motor yıpranam katsayısı   WEAR_...-> araştırılan katsayılar
-        param_EGT    = (480.0f + (power * 470.0f) + (lm35Temp - 25.0f)) * (1.0f + w * WEAR_EGT);
+        param_Basinc = 2.0f  + (power * 18.0f); // birimsiz basınç oranı (EPR benzeri), gerçek psi/bar karşılığı yok
+        // sensorTemp -> STM karttan gelen ham sicaklik, EGT_SENSOR_GAIN ile oranlanarak dogrudan EGT'ye yansir (ortam degil)
+        // W -> motor yıpranam katsayısı   WEAR_...-> araştırılan katsayılar
+        param_EGT    = (480.0f + (power * 470.0f) + (sensorTemp - 25.0f) * EGT_SENSOR_GAIN) * (1.0f + w * WEAR_EGT);
         param_Yakit  = (250.0f + (power * 2850.0f)) * (1.0f + w * WEAR_YAKIT);
         param_YagBasinci   = (40.0f + (power * 30.0f)) * (1.0f + w * WEAR_YAG_BASINCI);
         param_YagSicakligi = (60.0f + (power * 60.0f)) * (1.0f + w * WEAR_YAG_SICAKLIGI);
@@ -131,6 +143,9 @@ public:
         level = worstOf(level, bandRange(param_YagBasinci, 35.0f, 30.0f, 75.0f, 80.0f));
         level = worstOf(level, bandHigh(param_Titresim, 4.0f, 5.0f));
         level = worstOf(level, bandHigh(param_EGT, 775.0f, 850.0f));
+        // Yağ aşırı ısınması gerçek uçuş güvenliği riski (yağ film kaybı, yatak hasarı) - EGT gibi anlık alarma bağlandı.
+        level = worstOf(level, bandHigh(param_YagSicakligi, 100.0f, 110.0f));
+        // Yakıt debisi bilinçli olarak alarm dışı: anlık yüksekliği tehlikeli değil, sapması ancak trend (ECTM) ile anlamlı - wearNotes zaten bunu izliyor.
         return level;
     }
 
@@ -190,10 +205,15 @@ public:
     static constexpr float WEAR_EGT = 0.10f;
     static constexpr float WEAR_BASINC = 0.05f;
 
+    // TF10000'deki gibi ama bu motorun kendi EGT araligina gore: 350 (250 rolanti
+    // -> 600 tam guc) / 100 = 3.5. Ayni sensor sapmasi, iki motorda ORANTILI ama
+    // farkli buyuklukte bir EGT kaymasi yaratir - "motora gore oranli" bu yuzden.
+    static constexpr float EGT_SENSOR_GAIN = 3.5f;
+
     static float WearScale(float power) { return 0.2f + 0.8f * power; } // TF10000'e göre rölantide biraz daha fazla etki bırakıyor.
 
     // PD170'in fiziksel tepki modeli - kalıp TF10000 ile aynı: [güce bağlı taban] * [1 + yıpranma*katsayı].
-    void Engine_Start(float power, float lm35Temp) override {
+    void Engine_Start(float power, float sensorTemp) override {
         if (power < 0.0f) power = 0.0f;
         if (power > 1.0f) power = 1.0f;
         powerLevel = power;
@@ -201,8 +221,9 @@ public:
 
         param_Devir1 = 1000.0f + (power * 1800.0f);
         param_Devir2 = 70.0f + (power * 35.0f); // DİKKAT: Bu motorda RPM değil, soğutma suyu sıcaklığıdır.
-        param_Basinc = (1.0f  + (power * 1.6f)) * (1.0f + w * WEAR_BASINC); // WEAR_BASINC sadece PD170'de var (turbo basıncı yıpranmadan etkilenir).
-        param_EGT    = (250.0f + (power * 350.0f) + (lm35Temp - 25.0f)) * (1.0f + w * WEAR_EGT);
+        param_Basinc = (1.0f  + (power * 1.6f)) * (1.0f + w * WEAR_BASINC); // bar cinsinden mutlak turbo basıncı - WEAR_BASINC sadece PD170'de var (turbo basıncı yıpranmadan etkilenir).
+        // sensorTemp -> STM karttan gelen ham sicaklik, EGT_SENSOR_GAIN ile oranlanarak dogrudan EGT'ye yansir (ortam degil)
+        param_EGT    = (250.0f + (power * 350.0f) + (sensorTemp - 25.0f) * EGT_SENSOR_GAIN) * (1.0f + w * WEAR_EGT);
         param_Yakit  = (4.0f  + (power * 32.0f)) * (1.0f + w * WEAR_YAKIT);
         param_YagBasinci   = (2.5f  + (power * 3.0f)) * (1.0f + w * WEAR_YAG_BASINCI);
         param_YagSicakligi = (70.0f + (power * 45.0f)) * (1.0f + w * WEAR_YAG_SICAKLIGI);
@@ -216,6 +237,9 @@ public:
         level = worstOf(level, bandRange(param_YagBasinci, 2.0f, 1.5f, 5.8f, 6.0f));
         level = worstOf(level, bandHigh(param_Titresim, 2.2f, 2.7f));
         level = worstOf(level, bandHigh(param_EGT, 480.0f, 550.0f));
+        // Overboost gerçek bir turbo-dizelde kritik arıza modu (aşırı silindir basıncı, contra hasarı) - bu yüzden alarma bağlandı.
+        level = worstOf(level, bandHigh(param_Basinc, 2.3f, 2.5f));
+        // Yakıt debisi TF10000'deki gibi bilinçli olarak alarm dışı: anlık değeri değil, trend'i (ECTM/wearNotes) anlamlı.
         return level;
     }
 

@@ -1,4 +1,5 @@
 #include "enginemodel.h"                                //Bridge / ViewMode   src
+#include "embeddedtempsensor.h"
 #include <QTimer>
 #include <QRandomGenerator>
 #include <QVariantMap>
@@ -64,10 +65,26 @@ double approachFactor(double current, double target, double riseSeconds, double 
 
 //Constructor
 EngineModel::EngineModel(QObject *parent) : QObject(parent) {
+    m_embeddedSensor = new EmbeddedTempSensor(this);
+    connect(m_embeddedSensor, &EmbeddedTempSensor::temperatureUpdated, this, &EngineModel::onEmbeddedTempUpdated);
+    connect(m_embeddedSensor, &EmbeddedTempSensor::connectionStateChanged, this, &EngineModel::onEmbeddedConnectionChanged);
+
     m_simTimer = new QTimer(this);
     connect(m_simTimer, &QTimer::timeout, this, &EngineModel::simulationTick); //Qt'nin Signal kur
     m_simTimer->start(200);  //0.2 saniye loop
 
+}
+
+// Gomulu (STM32 dahili) sensorden gelen ham sicakligi Q_PROPERTY'ye yansitir - bu
+// deger ortam degil, engine_core.h::EGT_SENSOR_GAIN ile motora ozgu oranlanarak
+// dogrudan EGT'ye yansir.
+void EngineModel::onEmbeddedTempUpdated(double celsius) {
+    m_sensorSicakligi = celsius;
+    emit sensorSicakligiChanged();
+}
+void EngineModel::onEmbeddedConnectionChanged(bool connected) {
+    m_sensorBagli = connected;
+    emit sensorBagliChanged();
 }
 //destructor
 EngineModel::~EngineModel() {
@@ -76,12 +93,17 @@ EngineModel::~EngineModel() {
 
 // Polimorfizm devrede: Seçilen isme göre doğru motor sınıfı yaratılır.      3
 void EngineModel::selectEngine(const QString &engineName) {
+    // Tanınmayan isim gelirse önceki motoru silmeden sessizce reddet - aksi halde
+    // currentEngine nullptr kalır, simulationTick() no-op'a düşer ve UI son gördüğü
+    // değerlerde donup kalır (kullanıcıya hata gitmeden "hayalet" bir durum oluşur).
+    if (engineName != "TF10000" && engineName != "PD170") return;
+
     delete currentEngine;
     currentEngine = nullptr;
     m_engineFamily = engineName; // Filo seçiminde hangi sınıfı yaratacağımızı burada hatırlarız.
 
     if (engineName == "TF10000") currentEngine = new TF10000();
-    else if (engineName == "PD170") currentEngine = new PD170();
+    else currentEngine = new PD170();
 
     resetSimulationStateFor(currentEngine);
 }
@@ -134,7 +156,7 @@ void EngineModel::resetSimulationStateFor(Engine *newEngine) {
     m_tested = false;
 
     if (newEngine) {
-        newEngine->Engine_Start(0.0, 25.0);
+        newEngine->Engine_Start(0.0, m_sensorSicakligi); // sensor bagliysa gercek, degilse varsayilan 25 derece
         refreshFromEngine(/*withJitter=*/false); // İlk frame'i temiz (gürültüsüz) çizer.
 
         m_maintenanceStatusText = maintenanceStatusToText(newEngine->GetMaintenanceStatus());
@@ -144,7 +166,7 @@ void EngineModel::resetSimulationStateFor(Engine *newEngine) {
 }
 
 // Hedef gücü ayarlar (Örneğin QML'deki bir Slider'dan gelir).
-void EngineModel::setPower(double powerPercent) { m_targetPower = powerPercent; }
+void EngineModel::setPower(double powerPercent) { m_targetPower = qBound(0.0, powerPercent, 100.0); } // UI'dan gelen aşırı/negatif değer m_actualPower'ın sınırsız sürünmesini önler.
 void EngineModel::startEngine() { m_running = true; }      //motor başlatır            5
 void EngineModel::stopEngine() {                    //9
     m_running = false;
@@ -174,7 +196,7 @@ void EngineModel::simulationTick() {
     m_actualPower += qBound(-powerStep, m_targetPower - m_actualPower, powerStep);
 
 
-    currentEngine->Engine_Start(m_actualPower / 100.0, 25.0);// Çekirdek motor modeli güncellenir.
+    currentEngine->Engine_Start(m_actualPower / 100.0, m_sensorSicakligi);// Çekirdek motor modeli güncellenir - Gomulu.cpp.txt'den gelen ham ADC sicakligi EGT'ye motora ozgu oranla yansir (yoksa varsayilan 25).
     refreshFromEngine(/*withJitter=*/m_factorDevir1 > 0.01 || m_factorEgt > 0.01);    // Motor duruyorken sensör titremesi engeller
 
     //  Yağ basıncı oturana kadar test tamamlanmış sayılmaz.  sonra test biter               7

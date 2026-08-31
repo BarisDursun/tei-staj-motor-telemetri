@@ -7,6 +7,7 @@
 #include "engine_core.h"
 
 class QTimer;
+class EmbeddedTempSensor;
 
 // QObject'ten miras alıyoruz ki Qt'nin Meta-Object yeteneklerini (Signal/Slot, Property) kullanalım.
 class EngineModel : public QObject {
@@ -32,6 +33,12 @@ class EngineModel : public QObject {
 
     // QVariantList: QML de JavaScript dizisi (array)  -Aşınma notlarını liste halinde UI'a aktarır.
     Q_PROPERTY(QVariantList wearNotes READ wearNotes NOTIFY maintenanceStatusChanged)
+
+    // Gerçek STM32 dahili sıcaklık sensöründen (EmbeddedTempSensor) gelen ham sıcaklık - ORTAM değil,
+    // engine_core.h'daki EGT_SENSOR_GAIN ile motora özgü oranlanarak EGT'ye yansıtılır.
+    // Kart takılı değilse varsayılan 25°C'de kalır, sensorBagli bunu UI'da ayırt etmeyi sağlar.
+    Q_PROPERTY(double p_SensorSicakligi READ sensorSicakligi NOTIFY sensorSicakligiChanged)
+    Q_PROPERTY(bool   sensorBagli       READ sensorBagli     NOTIFY sensorBagliChanged)
 
 
 
@@ -68,6 +75,9 @@ public:
     QString maintenanceStatusText() const { return m_tested ? m_maintenanceStatusText : QStringLiteral("HENÜZ TEST EDİLMEDİ"); }  //runtime de  zaandan kazanc
     QVariantList wearNotes() const { return m_tested ? m_wearNotes : QVariantList(); }
 
+    double sensorSicakligi() const { return m_sensorSicakligi; }
+    bool sensorBagli() const { return m_sensorBagli; }
+
 signals: // status changingi QML'e (veya diğer C++ sınıflarına) haber veren sinyaller.
     void devir1Changed();
     void devir2Changed();
@@ -79,10 +89,16 @@ signals: // status changingi QML'e (veya diğer C++ sınıflarına) haber veren 
     void titresimChanged();
     void alarmLevelChanged();
     void maintenanceStatusChanged();
+    void sensorSicakligiChanged();
+    void sensorBagliChanged();
 
 private slots:
     // QTimer tarafından periyodik simulation loop
     void simulationTick();
+
+    // EmbeddedTempSensor'dan gelen sinyalleri kendi Q_PROPERTY'lerimize yansitir.
+    void onEmbeddedTempUpdated(double celsius);
+    void onEmbeddedConnectionChanged(bool connected);
 
 private:
     void refreshFromEngine(bool withJitter);   //anlık değişim için
@@ -135,6 +151,10 @@ private:
     QVariantList m_wearNotes;
 
     bool m_tested = false;      // check flag Yıpranma verisinin UI'da görünmesini kontrol eder.
+
+    EmbeddedTempSensor *m_embeddedSensor = nullptr; // parent=this, EngineModel silinince otomatik silinir.
+    double m_sensorSicakligi = 25.0; // sensor baglanana kadar / baglanti kesilirse kullanilan varsayilan.
+    bool m_sensorBagli = false;
 
 };
 
