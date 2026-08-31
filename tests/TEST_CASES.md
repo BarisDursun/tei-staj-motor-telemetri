@@ -4,7 +4,7 @@
 |---|---|
 | **Kapsam** | `engine_core.h` (fizik/domain modeli) ve `EngineModel` (Qt köprüsü) |
 | **Hazırlayan** | Kişi 2 — Test |
-| **İlgili dokümanlar** | [../docs/gereksinimler.md](../docs/gereksinimler.md), [../docs/test-parametre-referans-degerleri.md](../docs/test-parametre-referans-degerleri.md) |
+| **İlgili dokümanlar** | [../docs/gereksinimler.md](../docs/gereksinimler.md) (detaylı/ID'li), [../docs/Gereksinimler.docx](../docs/Gereksinimler.docx) (sade özet), [../docs/test-parametre-referans-degerleri.md](../docs/test-parametre-referans-degerleri.md) |
 | **Son çalıştırma** | `test_engine_core`: 80/80 CHECK PASS · `test_enginemodel`: 15/15 QtTest PASS (0 FAIL) |
 
 > Bu dosya, `gereksinimler.md` onayından sonra baştan yazıldı. Önceki sürüm, Kişi 1'in gerçek `EngineModel` implementasyonundan önceki bir **placeholder API**'yi (`temperature()`, `alarmState()`, `setTemperatureForTest()`...) test ediyordu ve artık şu anki kodla derlenmiyordu — bkz. eski `docs/test-parametre-referans-degerleri.md` §7.
