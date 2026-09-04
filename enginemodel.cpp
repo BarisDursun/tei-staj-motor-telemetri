@@ -82,6 +82,7 @@ void EngineModel::onEmbeddedTempUpdated(double celsius) {
     m_sensorSicakligi = celsius;
     emit sensorSicakligiChanged();
 }
+//Sensör Bağlantısı
 void EngineModel::onEmbeddedConnectionChanged(bool connected) {
     m_sensorBagli = connected;
     emit sensorBagliChanged();
